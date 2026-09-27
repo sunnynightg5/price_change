@@ -71,6 +71,7 @@ type
     FConn: TADOConnection;
     FQ: TADOQuery;
     FLastError: string;
+    FConnStr: string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -87,6 +88,8 @@ type
     function CountPriceRows: Integer;
     property LastError: string read FLastError;
     property Conn: TADOConnection read FConn;
+    { رشته اتصال؛ از فایل تنظیمات قابل تغییر است }
+    property ConnStr: string read FConnStr write FConnStr;
   end;
 
 function ClassifyCode(const Code: string): TPriceCategory;
@@ -101,6 +104,10 @@ function ToPersianDigits(const S: string): string;
 function GregorianToJalali(gy, gm, gd: Integer): string;
 function JalaliToday: string;
 function FindPrice(AList: TObjectList<TPriceItem>; const Code: string): TPriceItem;
+function NumberToPersianWords(v: Int64): string;
+function NormalizeText(const S: string; KeepSpaces: Boolean = False): string;
+function FuzzyDistance(const Term, Text: string): Integer;
+function IsDigitsOnly(const S: string): Boolean;
 
 implementation
 
@@ -230,25 +237,151 @@ var
   i: Integer;
   ch: Char;
 begin
+  { ارقام فارسی (۰-۹) و عربی (٠-٩) هر دو به لاتین تبدیل می‌شوند }
   Result := '';
   for i := 1 to Length(S) do
   begin
     ch := S[i];
+    if (ch >= #$06F0) and (ch <= #$06F9) then
+      Result := Result + Chr(Ord('0') + Ord(ch) - $06F0)
+    else if (ch >= #$0660) and (ch <= #$0669) then
+      Result := Result + Chr(Ord('0') + Ord(ch) - $0660)
+    else
+      Result := Result + ch;
+  end;
+end;
+
+function IsDigitsOnly(const S: string): Boolean;
+var
+  ch: Char;
+  t: string;
+begin
+  t := ToLatinDigits(Trim(S));
+  Result := t <> '';
+  for ch in t do
+    if not CharInSet(ch, ['0' .. '9', ' ', '-', '+']) then
+      Exit(False);
+end;
+
+function NormalizeText(const S: string; KeepSpaces: Boolean): string;
+var
+  ch: Char;
+begin
+  { یکسان‌سازی برای جستجو: ی/ک عربی، ارقام، حروف کوچک، × و x به * }
+  Result := '';
+  for ch in LowerCase(ToLatinDigits(Trim(S))) do
     case ch of
-      '۰': Result := Result + '0';
-      '۱': Result := Result + '1';
-      '۲': Result := Result + '2';
-      '۳': Result := Result + '3';
-      '۴': Result := Result + '4';
-      '۵': Result := Result + '5';
-      '۶': Result := Result + '6';
-      '۷': Result := Result + '7';
-      '۸': Result := Result + '8';
-      '۹': Result := Result + '9';
+      #$064A, #$0649:
+        Result := Result + #$06CC;
+      #$0643:
+        Result := Result + #$06A9;
+      #$0629:
+        Result := Result + #$0647;
+      #$00D7, 'x':
+        Result := Result + '*';
+      #$200C, #$200F, #$0640:
+        ;
+      ' ':
+        if KeepSpaces then
+          Result := Result + ch;
     else
       Result := Result + ch;
     end;
+end;
+
+function FuzzyDistance(const Term, Text: string): Integer;
+var
+  tw, xw: TArray<string>;
+  t, x: string;
+  best, d: Integer;
+begin
+  { برای هر کلمه جستجو نزدیک‌ترین کلمه متن پیدا و فاصله‌ها جمع می‌شود.
+    پیشوند بودن کلمه، تطابق کامل حساب می‌شود. }
+  tw := NormalizeText(Term, True).Split([' '], TStringSplitOptions.ExcludeEmpty);
+  xw := NormalizeText(Text, True).Split([' '], TStringSplitOptions.ExcludeEmpty);
+  if (Length(tw) = 0) or (Length(xw) = 0) then
+    Exit(MaxInt div 2);
+  Result := 0;
+  for t in tw do
+  begin
+    best := MaxInt div 2;
+    for x in xw do
+    begin
+      if StartsStr(t, x) then
+        d := 0
+      else
+        d := Levenshtein(t, x);
+      if d < best then
+        best := d;
+    end;
+    Inc(Result, best);
   end;
+end;
+
+function NumberToPersianWords(v: Int64): string;
+const
+  Ones: array [0 .. 19] of string = ('', 'یک', 'دو', 'سه', 'چهار', 'پنج',
+    'شش', 'هفت', 'هشت', 'نه', 'ده', 'یازده', 'دوازده', 'سیزده', 'چهارده',
+    'پانزده', 'شانزده', 'هفده', 'هجده', 'نوزده');
+  Tens: array [2 .. 9] of string = ('بیست', 'سی', 'چهل', 'پنجاه', 'شصت',
+    'هفتاد', 'هشتاد', 'نود');
+  Hundreds: array [1 .. 9] of string = ('صد', 'دویست', 'سیصد', 'چهارصد',
+    'پانصد', 'ششصد', 'هفتصد', 'هشتصد', 'نهصد');
+  Scales: array [0 .. 6] of string = ('', 'هزار', 'میلیون', 'میلیارد',
+    'هزار میلیارد', 'میلیون میلیارد', 'میلیارد میلیارد');
+
+  function Below1000(n: Integer): string;
+  begin
+    Result := '';
+    if n >= 100 then
+    begin
+      Result := Hundreds[n div 100];
+      n := n mod 100;
+    end;
+    if n = 0 then
+      Exit;
+    if Result <> '' then
+      Result := Result + ' و ';
+    if n < 20 then
+      Result := Result + Ones[n]
+    else
+    begin
+      Result := Result + Tens[n div 10];
+      if n mod 10 <> 0 then
+        Result := Result + ' و ' + Ones[n mod 10];
+    end;
+  end;
+
+var
+  neg: Boolean;
+  scale, g: Integer;
+  part: string;
+begin
+  if v = 0 then
+    Exit('صفر');
+  neg := v < 0;
+  if neg then
+    v := -v;
+  Result := '';
+  scale := 0;
+  while (v > 0) and (scale <= High(Scales)) do
+  begin
+    g := v mod 1000;
+    v := v div 1000;
+    if g > 0 then
+    begin
+      part := Below1000(g);
+      if Scales[scale] <> '' then
+        part := part + ' ' + Scales[scale];
+      if Result = '' then
+        Result := part
+      else
+        Result := part + ' و ' + Result;
+    end;
+    Inc(scale);
+  end;
+  if neg then
+    Result := 'منفی ' + Result;
 end;
 
 function ParseMoney(const S: string): Int64;
@@ -404,7 +537,8 @@ begin
   inherited Create;
   FConn := TADOConnection.Create(nil);
   FConn.LoginPrompt := False;
-  FConn.ConnectionString := SabzConnStr;
+  FConnStr := SabzConnStr;
+  FConn.ConnectionString := FConnStr;
   FConn.ConnectionTimeout := 8;
   FQ := TADOQuery.Create(nil);
   FQ.Connection := FConn;
@@ -428,7 +562,7 @@ begin
   try
     if FConn.Connected then
       FConn.Connected := False;
-    FConn.ConnectionString := SabzConnStr;
+    FConn.ConnectionString := FConnStr;
     FConn.Connected := True;
     Result := True;
   except
@@ -531,12 +665,17 @@ begin
     FQ.SQL.Text :=
       'SELECT TOP ' + IntToStr(Limit) +
       ' Id_p, sex, Name, National_Code, Mobile, job, [count] FROM person ' +
-      'WHERE (Name LIKE :t1) OR (CAST(Mobile AS nvarchar(20)) LIKE :t2) ' +
+      'WHERE (Name LIKE :t1) OR (Name LIKE :t4) ' +
+      'OR (CAST(Mobile AS nvarchar(20)) LIKE :t2) ' +
       'OR (CAST(National_Code AS nvarchar(20)) LIKE :t3) ORDER BY Id_p DESC';
     pat := '%' + Term + '%';
     FQ.Parameters.ParamByName('t1').Value := pat;
     FQ.Parameters.ParamByName('t2').Value := pat;
     FQ.Parameters.ParamByName('t3').Value := pat;
+    { نام‌هایی که با «ي/ك» عربی ثبت شده‌اند هم پیدا شوند }
+    pat := StringReplace(pat, #$06CC, #$064A, [rfReplaceAll]);
+    pat := StringReplace(pat, #$06A9, #$0643, [rfReplaceAll]);
+    FQ.Parameters.ParamByName('t4').Value := pat;
     FQ.Open;
     AList.Clear;
     while not FQ.Eof do

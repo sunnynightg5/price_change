@@ -5,8 +5,11 @@
   - داشبورد
   - جدول قیمت (خوانا)
   - ویرایش قیمت‌ها (اتصال به جدول Price)
-  - محاسبه سفارش (سبد سفارش)
-  - مشتریان (جستجوی فازی)
+  - محاسبه سفارش (سبد سفارش، تخفیف درصدی، فاکتور با مبلغ به حروف)
+  - هزینه‌های تمام‌شده
+  - مشتریان (جستجوی فازی، مقاوم به غلط تایپی و ی/ک عربی)
+  - تاریخچه تغییر قیمت‌ها (PriceLog.csv کنار برنامه)
+  - میان‌برها: F1..F6 صفحات، Ctrl+S ذخیره، Ctrl+F جستجو، Ctrl+R بارگذاری
   --------------------------------------------------------------------------- }
 
 interface
@@ -14,7 +17,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   System.SysUtils, System.Variants, System.Classes, System.Types,
-  System.Win.ComObj,
+  System.Win.ComObj, System.IniFiles, System.Generics.Defaults,
   System.Generics.Collections, System.StrUtils, System.Math, System.UITypes,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
   Vcl.ExtCtrls, Vcl.Grids, Vcl.Clipbrd,
@@ -37,9 +40,22 @@ type
   private
     FData: TSabzData;
     FPrices: TObjectList<TPriceItem>;
+    FIndex: TDictionary<string, TPriceItem>;
     FCart: TObjectList<TCartLine>;
-    FPages: array [0 .. 4] of TPanel;
-    FNav: array [0 .. 4] of TPanel;
+    FPages: array [0 .. 5] of TPanel;
+    FNav: array [0 .. 5] of TPanel;
+    FExcelPath: string;
+    FCustomerMobile: string;
+    FGridLog: TStringGrid;
+    FGridPeople: TStringGrid;
+    FEdPeopleSearch: TEdit;
+    FLblPeopleInfo: TLabel;
+    FPeopleTimer: TTimer;
+    FPeopleDb: TObjectList<TPerson>;
+    FAllPeople: TObjectList<TPerson>;
+    FAllPeopleLoaded: Boolean;
+    FPeopleView: TList<TPerson>;
+    FPeopleDist: TList<Integer>;
     FCurrentPage: Integer;
     FUpdating: Boolean;
     FLblConn: TLabel;
@@ -100,7 +116,7 @@ type
     procedure FillPriceGrid;
     procedure FillCatalog;
     function PriceOf(const Code: string): Int64;
-    procedure RefreshCart;
+    procedure RefreshCart(ASelect: Integer = -1);
     procedure RecalcCart;
     procedure UpdateConnStatus;
     procedure UpdateStatCards;
@@ -155,10 +171,41 @@ type
     function EstimatedCostOf(const Code: string): Int64;
     function InvoiceText(out DocNo: string; out Revenue, Cost, Profit,
       Discount, Payable: Int64): string;
-    function InvoiceHTML(out DocNo: string): string;
+    function InvoiceHTML(const DocNo: string): string;
     procedure BtnGoEditClick(Sender: TObject);
     procedure BtnGoCalcClick(Sender: TObject);
     procedure BtnGoMatrixClick(Sender: TObject);
+    { ---- افزوده‌های نسخه ۳ ---- }
+    procedure LoadSettings;
+    procedure SaveSettings;
+    function ResolveExcelPath: Boolean;
+    procedure RebuildIndex;
+    function FindItem(const Code: string): TPriceItem;
+    function PendingPriceCount: Integer;
+    function ConfirmPending(IncludeCost: Boolean): Boolean;
+    function DoSavePrices: Boolean;
+    function DoSaveCosts: Boolean;
+    procedure FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure LogPriceChange(const Code: string; OldV, NewV: Int64;
+      const Source: string);
+    procedure FillLogGrid;
+    procedure GridLogDrawCell(Sender: TObject; ACol, ARow: Integer;
+      Rect: TRect; State: TGridDrawState);
+    procedure GridCostDrawCell(Sender: TObject; ACol, ARow: Integer;
+      Rect: TRect; State: TGridDrawState);
+    function DiscountValue(Subtotal: Int64): Int64;
+    procedure BuildPeoplePage;
+    procedure EdPeopleSearchChange(Sender: TObject);
+    procedure PeopleTimerTimer(Sender: TObject);
+    procedure RunPeopleSearch;
+    procedure FillPeopleGrid;
+    procedure PickSelectedPerson(Sender: TObject);
+    procedure GridPeopleDrawCell(Sender: TObject; ACol, ARow: Integer;
+      Rect: TRect; State: TGridDrawState);
+    procedure BtnGoPeopleClick(Sender: TObject);
+    procedure EdSearchKeyPress(Sender: TObject; var Key: Char);
+    procedure EdCustomerChange(Sender: TObject);
   public
   end;
 
@@ -174,8 +221,8 @@ var
     C_SUCCESS, C_DANGER, C_SEL, C_ACCENT_L: TColor;
 
 const
-  NavTitles: array [0 .. 4] of string = ('داشبورد', 'جدول قیمت', 'ویرایش قیمت',
-    'محاسبه سفارش', 'هزینه‌های تمام‌شده');
+  NavTitles: array [0 .. 5] of string = ('داشبورد', 'جدول قیمت', 'ویرایش قیمت',
+    'محاسبه سفارش', 'هزینه‌های تمام‌شده', 'مشتریان');
 
   MatrixSizes: array [0 .. 19] of string = ('2*3', '3*4', '6*4', '6*9', '9*12',
     '10*15', '13*18', '16*21', '20*25', '20*30', '24*30', '30*40', '35*70',
@@ -187,7 +234,11 @@ const
 
   CostPrefixes: array [1 .. 3] of string = ('p', 's', 'l');
 
-  PriceXlsPath = 'F:\Program sabz\Price.xls';
+  PriceXlsPath = 'F:\Program sabz\Price.xls'; { پیش‌فرض؛ در SabzPrice.ini قابل تغییر }
+  SettingsFile = 'SabzPrice.ini';
+  PriceLogFile = 'PriceLog.csv';
+  CostInfoText =
+    'کد p = چاپ، s = شاسی، l = لمینت. علامت «—» یعنی کدی ثبت نشده است.';
 
 function Blend(C1, C2: TColor; A: Double): TColor;
 begin
@@ -295,6 +346,9 @@ begin
   Result.Options := [goVertLine, goHorzLine, goFixedVertLine, goFixedHorzLine,
     goThumbTracking];
   Result.ScrollBars := ssBoth;
+  { رسم سلول‌ها کاملاً توسط رویدادهای OnDrawCell فرم انجام می‌شود }
+  Result.DefaultDrawing := False;
+  Result.DrawingStyle := gdsClassic;
 end;
 
 procedure SetupColumns(G: TStringGrid; const Titles: array of string;
@@ -308,6 +362,7 @@ begin
     G.Cells[i, 0] := Titles[i];
     G.ColWidths[i] := Widths[i];
   end;
+  G.RowHeights[0] := 32;
 end;
 
 function NewCard(AOwner: TComponent; const ATitle: string): TPanel;
@@ -395,7 +450,58 @@ begin
     if ACol = 1 then
       Result := taCenter;
   end
-  ;
+  else if G = Form1.FGridCost then
+  begin
+    if ACol = 0 then
+      Result := taCenter;
+  end
+  else if G = Form1.FGridPeople then
+  begin
+    if ACol in [1, 5, 6] then
+      Result := taCenter;
+  end
+  else if G = Form1.FGridLog then
+  begin
+    if ACol in [0, 1, 2, 5] then
+      Result := taCenter;
+  end;
+end;
+
+{ رنگ پس‌زمینه و قلم استاندارد سلول (سرستون، انتخاب، ردیف‌های راه‌راه) }
+procedure PrepareCell(G: TStringGrid; ARow: Integer; State: TGridDrawState);
+begin
+  G.Canvas.Font.Style := [];
+  G.Canvas.Font.Color := C_TEXT;
+  if gdFixed in State then
+  begin
+    G.Canvas.Brush.Color := C_NAVY;
+    G.Canvas.Font.Color := clWhite;
+    G.Canvas.Font.Style := [fsBold];
+  end
+  else if gdSelected in State then
+    G.Canvas.Brush.Color := C_SEL
+  else if Odd(ARow) then
+    G.Canvas.Brush.Color := C_ALT
+  else
+    G.Canvas.Brush.Color := clWhite;
+end;
+
+procedure FinishCell(G: TStringGrid; ACol, ARow: Integer; const Rect: TRect);
+var
+  al: TAlignment;
+begin
+  G.Canvas.FillRect(Rect);
+  DrawGridFrame(G, Rect);
+  if ARow < G.FixedRows then
+    al := taCenter
+  else
+    al := GridColAlign(G, ACol);
+  DrawGridText(G, ACol, ARow, Rect, G.Cells[ACol, ARow], al);
+end;
+
+function AppDir: string;
+begin
+  Result := ExtractFilePath(Application.ExeName);
 end;
 
 { ------------------------------- TCartLine ------------------------------- }
@@ -422,13 +528,28 @@ begin
   DoubleBuffered := True;
   KeyPreview := True;
 
+  OnKeyDown := FormKeyDown;
+  OnCloseQuery := FormCloseQuery;
+
   FData := TSabzData.Create;
   FPrices := TObjectList<TPriceItem>.Create(True);
+  FIndex := TDictionary<string, TPriceItem>.Create;
   FCart := TObjectList<TCartLine>.Create(True);
   FOriginal := TDictionary<string, Int64>.Create;
   FPctBackup := TDictionary<string, Int64>.Create;
   FCostDraft := TDictionary<string, Int64>.Create;
+  FPeopleDb := TObjectList<TPerson>.Create(True);
+  FAllPeople := TObjectList<TPerson>.Create(True);
+  FPeopleView := TList<TPerson>.Create;
+  FPeopleDist := TList<Integer>.Create;
   FCurrentPage := -1;
+
+  FPeopleTimer := TTimer.Create(Self);
+  FPeopleTimer.Enabled := False;
+  FPeopleTimer.Interval := 350;
+  FPeopleTimer.OnTimer := PeopleTimerTimer;
+
+  LoadSettings;
 
   BuildHeader;
   BuildFooter;
@@ -438,6 +559,7 @@ begin
   BuildPricePage;
   BuildCalcPage;
   BuildCostPage;
+  BuildPeoplePage;
 
   ShowPage(StrToIntDef(ParamStr(1), 0));
 
@@ -452,6 +574,12 @@ end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
 begin
+  FPeopleTimer.Enabled := False;
+  FPeopleDist.Free;
+  FPeopleView.Free;
+  FAllPeople.Free;
+  FPeopleDb.Free;
+  FIndex.Free;
   FCostDraft.Free;
   FPctBackup.Free;
   FOriginal.Free;
@@ -539,7 +667,21 @@ begin
   FStatus.AutoSize := False;
   FStatus.Alignment := taRightJustify;
 
-  with MakeLabel(ft, 'نسخه ۲٫۰', C_MUTED, 8) do
+  with MakeLabel(ft,
+    'F1..F6 صفحات  |  Ctrl+S ذخیره  |  Ctrl+F جستجو  |  Ctrl+R بارگذاری مجدد',
+    C_MUTED, 8) do
+  begin
+    Align := alLeft;
+    AlignWithMargins := True;
+    Margins.SetBounds(8, 0, 8, 0);
+    Layout := tlCenter;
+    AutoSize := False;
+    Width := 420;
+    Alignment := taLeftJustify;
+    BiDiMode := bdLeftToRight;
+  end;
+
+  with MakeLabel(ft, 'نسخه ۳٫۰', C_MUTED, 8) do
   begin
     Align := alLeft;
     AlignWithMargins := True;
@@ -569,7 +711,7 @@ begin
     Height := 18;
   end;
 
-  for i := 0 to 4 do
+  for i := 0 to High(NavTitles) do
   begin
     b := TPanel.Create(nav);
     b.Parent := nav;
@@ -593,6 +735,8 @@ begin
     b.OnMouseLeave := NavLeave;
     b.AlignWithMargins := True;
     b.Margins.SetBounds(10, 2, 10, 2);
+    b.Hint := 'میان‌بر: F' + IntToStr(i + 1);
+    b.ShowHint := True;
     FNav[i] := b;
   end;
 end;
@@ -697,12 +841,34 @@ begin
     Margins.SetBounds(0, 0, 0, 8);
     Height := 44;
   end;
+  with MakeButton(content, 'مشتریان (جستجوی هوشمند)', C_NAVY, clWhite,
+    BtnGoPeopleClick) do
+  begin
+    Align := alTop;
+    AlignWithMargins := True;
+    Margins.SetBounds(0, 0, 0, 8);
+    Height := 44;
+  end;
   with MakeButton(content, 'بارگذاری مجدد قیمت‌ها', C_BORDER, C_TEXT,
     BtnReconnectClick) do
   begin
     Align := alTop;
     Height := 44;
   end;
+
+  { ---- تاریخچه آخرین تغییرات قیمت ---- }
+  card := NewCard(body, 'آخرین تغییرات قیمت (تاریخچه)');
+  card.Parent := body;
+  card.AlignWithMargins := True;
+  card.Margins.SetBounds(6, 6, 6, 6);
+  card.Align := alLeft;
+  card.Width := 470;
+  FGridLog := MakeGrid(card);
+  FGridLog.Align := alClient;
+  FGridLog.Options := FGridLog.Options + [goRowSelect];
+  SetupColumns(FGridLog, ['تاریخ', 'ساعت', 'کد', 'قبلی', 'جدید', 'تغییر'],
+    [78, 48, 78, 88, 88, 62]);
+  FGridLog.OnDrawCell := GridLogDrawCell;
 
   card := NewCard(body, 'راهنمای کدها و معنی قیمت‌ها');
   card.Parent := body;
@@ -757,9 +923,13 @@ begin
   FGridMatrix.Align := alClient;
   FGridMatrix.Options := FGridMatrix.Options + [goRowSelect];
   SetupColumns(FGridMatrix,
-    ['سایز', 'چاپ مجدد', 'عکس جدید', 'شاسی', 'مجدد+شاسی', 'جدید+شاسی', 'چهره اضافه'],
-    [110, 150, 150, 150, 160, 160, 150]);
+    ['سایز', 'چاپ مجدد', 'عکس جدید', 'شاسی', 'مجدد+شاسی', 'جدید+شاسی',
+    'چهره اضافه', 'سود چاپ مجدد'],
+    [100, 130, 130, 130, 140, 140, 120, 130]);
   FGridMatrix.RowCount := 1 + Length(MatrixSizes);
+  FGridMatrix.OnDrawCell := GridMatrixDrawCell;
+  FGridMatrix.Hint := 'سود چاپ مجدد = قیمت چاپ مجدد − (هزینه چاپ + لمینت)';
+  FGridMatrix.ShowHint := True;
 end;
 
 procedure TForm1.BuildPricePage;
@@ -796,7 +966,7 @@ begin
   FEdPriceSearch.Top := 10;
   FEdPriceSearch.Width := 260;
   FEdPriceSearch.Height := 32;
-  FEdPriceSearch.TextHint := 'جستجو در شرح یا کد...';
+  FEdPriceSearch.TextHint := 'جستجو در شرح یا کد (مثلاً 10x15)...';
 
   FCbCat := TComboBox.Create(toolbar);
   FCbCat.Parent := toolbar;
@@ -925,8 +1095,9 @@ begin
   FGridPrice.Align := alClient;
   FGridPrice.Options := FGridPrice.Options + [goEditing];
   SetupColumns(FGridPrice,
-    ['کد', 'شرح', 'دسته', 'قیمت (تومان)', 'تعداد', 'وضعیت'],
-    [85, 300, 180, 130, 60, 90]);
+    ['کد', 'شرح', 'دسته', 'قیمت (تومان)', 'تعداد', 'وضعیت / مقدار قبلی'],
+    [85, 290, 180, 120, 50, 210]);
+  FGridPrice.OnDrawCell := GridPriceDrawCell;
   FGridPrice.OnSelectCell := GridPriceSelectCell;
   FGridPrice.OnSetEditText := GridPriceSetEditText;
 end;
@@ -963,7 +1134,8 @@ begin
   FEdCatSearch.Top := 7;
   FEdCatSearch.Width := 240;
   FEdCatSearch.Height := 32;
-  FEdCatSearch.TextHint := 'جستجو...';
+  FEdCatSearch.TextHint := 'جستجو... (Enter = افزودن)';
+  FEdCatSearch.OnKeyPress := EdSearchKeyPress;
   with MakeButton(catTool, 'افزودن', C_ACCENT, clWhite, BtnAddClick) do
   begin
     Left := 256;
@@ -977,6 +1149,7 @@ begin
   FGridCatalog.Options := FGridCatalog.Options + [goRowSelect];
   SetupColumns(FGridCatalog, ['شرح', 'قیمت (تومان)'], [300, 140]);
   FGridCatalog.OnDblClick := GridCatDblClick;
+  FGridCatalog.OnDrawCell := GridCatDrawCell;
 
   { --- cart (سمت چپ) --- }
   cartCard := NewCard(outer, 'سبد سفارش');
@@ -1000,6 +1173,15 @@ begin
   FEdCustomer.Width := 300;
   FEdCustomer.Height := 30;
   FEdCustomer.TextHint := 'نام مشتری (اختیاری)';
+  FEdCustomer.OnChange := EdCustomerChange;
+  with MakeButton(custRow, 'انتخاب از مشتریان', C_GOLD, C_NAVY,
+    BtnGoPeopleClick) do
+  begin
+    Left := 408;
+    Top := 5;
+    Width := 130;
+    Height := 30;
+  end;
 
   cartTool := MakePanel(cartCard, C_CARD);
   cartTool.Align := alTop;
@@ -1102,7 +1284,7 @@ begin
   FLblCost.Top := 40;
   FLblCost.AutoSize := True;
 
-  with MakeLabel(totals, 'تخفیف (تومان):', C_TEXT, 10, True) do
+  with MakeLabel(totals, 'تخفیف (تومان یا ٪):', C_TEXT, 10, True) do
   begin
     Left := 14;
     Top := 72;
@@ -1114,6 +1296,9 @@ begin
   FEdDisc.Width := 160;
   FEdDisc.Height := 30;
   FEdDisc.Text := '0';
+  FEdDisc.TextHint := 'مثلاً 50000 یا 10%';
+  FEdDisc.Hint := 'مبلغ تخفیف به تومان، یا درصد با علامت ٪ (مثلاً 10%)';
+  FEdDisc.ShowHint := True;
 
   with MakeLabel(totals, 'سود خالص:', C_SUCCESS, 11, True) do
   begin
@@ -1143,6 +1328,7 @@ begin
   SetupColumns(FGridCart,
     ['شرح', 'تعداد', 'قیمت واحد', 'هزینه ما', 'جمع'],
     [160, 55, 95, 95, 100]);
+  FGridCart.OnDrawCell := GridCartDrawCell;
   FGridCart.OnSelectCell := GridCartSelectCell;
   FGridCart.OnSetEditText := GridCartSetEditText;
 end;
@@ -1184,9 +1370,7 @@ begin
   FBtnCostSave.Width := 150;
   FBtnCostSave.Height := 32;
 
-  FLblCostInfo := MakeLabel(toolbar,
-    'کد p = چاپ، s = شاسی، l = لمینت. علامت «—» یعنی کدی ثبت نشده است.',
-    C_MUTED, 8);
+  FLblCostInfo := MakeLabel(toolbar, CostInfoText, C_MUTED, 8);
   FLblCostInfo.Left := 174;
   FLblCostInfo.Top := 18;
   FLblCostInfo.AutoSize := True;
@@ -1197,6 +1381,7 @@ begin
   SetupColumns(FGridCost,
     ['سایز', 'چاپ (تومان)', 'شاسی (تومان)', 'لمینت (تومان)'],
     [130, 170, 170, 170]);
+  FGridCost.OnDrawCell := GridCostDrawCell;
   FGridCost.OnSelectCell := GridCostSelectCell;
   FGridCost.OnSetEditText := GridCostSetEditText;
 end;
@@ -1223,7 +1408,7 @@ begin
           FGridCost.Cells[c, i + 1] := FormatMoney(v)
         else
         begin
-          it := FindPrice(FPrices, code);
+          it := FindItem(code);
           if it <> nil then
             FGridCost.Cells[c, i + 1] := FormatMoney(it.Price)
           else
@@ -1258,7 +1443,7 @@ begin
     Exit;
   code := CostPrefixes[ACol] + FGridCost.Cells[0, ARow];
   v := ParseMoney(Value);
-  it := FindPrice(FPrices, code);
+  it := FindItem(code);
   if ((it <> nil) and (v = it.Price)) or ((it = nil) and (v = 0)) then
   begin
     { بدون تغییر واقعی (مثلاً فقط کلیک) }
@@ -1271,14 +1456,26 @@ begin
       ' تغییر یافت. برای ثبت، «ذخیره هزینه‌ها» را بزنید.');
   end;
   if FCostDraft.Count = 0 then
-    FLblCostInfo.Caption :=
-      'کد p = چاپ، s = شاسی، l = لمینت. علامت «—» یعنی کدی ثبت نشده است.'
+    FLblCostInfo.Caption := CostInfoText
   else
     FLblCostInfo.Caption := IntToStr(FCostDraft.Count) +
       ' هزینه تغییر کرده (ذخیره نشده)';
 end;
 
 procedure TForm1.BtnCostSaveClick(Sender: TObject);
+begin
+  if FCostDraft.Count = 0 then
+  begin
+    SetStatus('هزینه تغییریافته‌ای برای ذخیره وجود ندارد.');
+    Exit;
+  end;
+  { ذخیره هزینه‌ها قیمت‌ها را دوباره بارگذاری می‌کند؛ تغییرات صفحه ویرایش
+    قیمت نباید بی‌صدا از بین برود }
+  if ConfirmPending(False) then
+    DoSaveCosts;
+end;
+
+function TForm1.DoSaveCosts: Boolean;
 var
   pair: TPair<string, Int64>;
   it: TPriceItem;
@@ -1291,13 +1488,16 @@ begin
   try
     for pair in FCostDraft do
     begin
-      it := FindPrice(FPrices, pair.Key);
+      it := FindItem(pair.Key);
       if it <> nil then
       begin
         if it.Price <> pair.Value then
         begin
           if FData.SavePrice(pair.Key, pair.Value) then
-            Inc(ok)
+          begin
+            LogPriceChange(pair.Key, it.Price, pair.Value, 'هزینه');
+            Inc(ok);
+          end
           else
             Inc(fail);
         end;
@@ -1305,7 +1505,10 @@ begin
       else
       begin
         if FData.InsertPrice(pair.Key, pair.Value) then
-          Inc(ins)
+        begin
+          LogPriceChange(pair.Key, -1, pair.Value, 'هزینه (جدید)');
+          Inc(ins);
+        end
         else
           Inc(fail);
       end;
@@ -1313,9 +1516,10 @@ begin
   finally
     Screen.Cursor := crDefault;
   end;
+  Result := fail = 0;
   FCostDraft.Clear;
   ReloadPrices;
-  FLblCostInfo.Caption := 'کد p = چاپ، s = شاسی، l = لمینت.';
+  FLblCostInfo.Caption := CostInfoText;
   if fail = 0 then
     SetStatus(Format('%d به‌روزرسانی و %d ردیف جدید ذخیره شد.',
       [ok, ins]))
@@ -1338,12 +1542,10 @@ var
   v: Int64;
   it: TPriceItem;
 begin
-  if not FileExists(PriceXlsPath) then
-  begin
-    Application.MessageBox(PChar('فایل اکسل پیدا نشد:' + sLineBreak +
-      PriceXlsPath), 'خطا', MB_OK or MB_ICONERROR);
+  if not ConfirmPending(True) then
     Exit;
-  end;
+  if not ResolveExcelPath then
+    Exit;
   Screen.Cursor := crHourGlass;
   try
     try
@@ -1351,7 +1553,7 @@ begin
       try
         XL.Visible := False;
         XL.DisplayAlerts := False;
-        WB := XL.Workbooks.Open(PriceXlsPath);
+        WB := XL.Workbooks.Open(FExcelPath);
         try
           WS := WB.Worksheets['Price'];
           n := WS.UsedRange.Rows.Count;
@@ -1366,17 +1568,23 @@ begin
             if VarIsEmpty(pv) or VarIsNull(pv) then
               Continue;
             v := ParseMoney(VarToStr(pv));
-            it := FindPrice(FPrices, code);
+            it := FindItem(code);
             if it <> nil then
             begin
               if it.Price <> v then
                 if FData.SavePrice(code, v) then
+                begin
+                  LogPriceChange(code, it.Price, v, 'اکسل');
                   Inc(upd);
+                end;
             end
             else
             begin
               if FData.InsertPrice(code, v) then
+              begin
+                LogPriceChange(code, -1, v, 'اکسل (جدید)');
                 Inc(ins);
+              end;
             end;
           end;
         finally
@@ -1420,15 +1628,11 @@ begin
       'خطا', MB_OK or MB_ICONWARNING);
     Exit;
   end;
-  if not FileExists(PriceXlsPath) then
-  begin
-    Application.MessageBox(PChar('فایل اکسل پیدا نشد:' + sLineBreak +
-      PriceXlsPath), 'خطا', MB_OK or MB_ICONERROR);
+  if not ResolveExcelPath then
     Exit;
-  end;
-  bak := ChangeFileExt(PriceXlsPath, '') + '_' +
+  bak := ChangeFileExt(FExcelPath, '') + '_' +
     FormatDateTime('yymmdd_hhnnss', Now) + '.bak';
-  if not CopyFile(PChar(PriceXlsPath), PChar(bak), True) then
+  if not CopyFile(PChar(FExcelPath), PChar(bak), True) then
   begin
     Application.MessageBox('ساخت نسخه پشتیبان از اکسل ناموفق بود.',
       'خطا', MB_OK or MB_ICONERROR);
@@ -1441,7 +1645,7 @@ begin
       try
         XL.Visible := False;
         XL.DisplayAlerts := False;
-        WB := XL.Workbooks.Open(PriceXlsPath);
+        WB := XL.Workbooks.Open(FExcelPath);
         try
           WS := WB.Worksheets['Price'];
           WS.Cells.Clear;
@@ -1484,10 +1688,10 @@ procedure TForm1.ShowPage(Index: Integer);
 var
   i: Integer;
 begin
-  if (Index < 0) or (Index > 4) then
+  if (Index < 0) or (Index > High(FPages)) then
     Exit;
   FCurrentPage := Index;
-  for i := 0 to 4 do
+  for i := 0 to High(FPages) do
   begin
     FPages[i].Visible := (i = Index);
     if Assigned(FNav[i]) then
@@ -1509,6 +1713,9 @@ begin
       UpdateStatCards;
     3:
       RefreshCart;
+    5:
+      if FEdPeopleSearch.CanFocus then
+        FEdPeopleSearch.SetFocus;
   end;
 end;
 
@@ -1584,6 +1791,7 @@ begin
     FLblStat[3].Caption := 'قطع';
     FLblStat[3].Font.Color := C_DANGER;
   end;
+  FillLogGrid;
 end;
 
 procedure TForm1.LayoutStats(Sender: TObject);
@@ -1615,6 +1823,9 @@ end;
 
 procedure TForm1.BtnReconnectClick(Sender: TObject);
 begin
+  if not ConfirmPending(True) then
+    Exit;
+  FAllPeopleLoaded := False;
   Screen.Cursor := crHourGlass;
   try
     if FData.Connect then
@@ -1639,6 +1850,7 @@ begin
   try
     if FData.LoadPrices(FPrices) then
     begin
+      RebuildIndex;
       FOriginal.Clear;
       FPctBackup.Clear;
       FCostDraft.Clear;
@@ -1653,6 +1865,7 @@ begin
     end
     else
     begin
+      RebuildIndex;
       UpdateConnStatus;
       SetStatus('خطا در بارگذاری قیمت‌ها: ' + FData.LastError);
     end;
@@ -1674,7 +1887,7 @@ function TForm1.PriceOf(const Code: string): Int64;
 var
   it: TPriceItem;
 begin
-  it := FindPrice(FPrices, Code);
+  it := FindItem(Code);
   if it <> nil then
     Result := it.Price
   else
@@ -1706,21 +1919,25 @@ end;
 function ParsePercentText(const S: string; out V: Double): Boolean;
 var
   t: string;
+  fs: TFormatSettings;
 begin
+  fs := TFormatSettings.Create;
+  fs.DecimalSeparator := '.';
   t := ToLatinDigits(Trim(S));
   t := StringReplace(t, '٫', '.', [rfReplaceAll]);
   t := StringReplace(t, '،', '.', [rfReplaceAll]);
   t := StringReplace(t, '٪', '', [rfReplaceAll]);
   t := StringReplace(t, '%', '', [rfReplaceAll]);
+  t := StringReplace(t, '/', '.', [rfReplaceAll]);
   t := Trim(t);
-  Result := TryStrToFloat(t, V);
+  Result := TryStrToFloat(t, V, fs);
 end;
 
 procedure TForm1.FillMatrix;
 var
   i: Integer;
   sz: string;
-  base, n, fr, f: Int64;
+  base, n, fr, f, cost: Int64;
 begin
   if FGridMatrix = nil then
     Exit;
@@ -1747,6 +1964,11 @@ begin
       else
         FGridMatrix.Cells[5, i + 1] := '—';
       FGridMatrix.Cells[6, i + 1] := MoneyCell(f);
+      cost := EstimatedCostOf(sz);
+      if (base > 0) and (cost > 0) then
+        FGridMatrix.Cells[7, i + 1] := FormatMoney(base - cost)
+      else
+        FGridMatrix.Cells[7, i + 1] := '—';
     end;
   finally
     FUpdating := False;
@@ -1765,8 +1987,9 @@ begin
     cat := FCbCat.Items[FCbCat.ItemIndex];
   if (cat <> '') and (PriceCategoryNames[it.Category] <> cat) then
     Exit(False);
-  if (term <> '') and (Pos(term, it.Code) = 0) and
-    (Pos(term, it.DisplayName) = 0) then
+  term := NormalizeText(term);
+  if (term <> '') and (Pos(term, NormalizeText(it.Code)) = 0) and
+    (Pos(term, NormalizeText(it.DisplayName)) = 0) then
     Exit(False);
   Result := True;
 end;
@@ -1785,6 +2008,7 @@ procedure TForm1.FillPriceGrid;
 var
   it: TPriceItem;
   r: Integer;
+  orig: Int64;
 begin
   if FGridPrice = nil then
     Exit;
@@ -1802,10 +2026,14 @@ begin
       FGridPrice.Cells[2, r] := PriceCategoryNames[it.Category];
       FGridPrice.Cells[3, r] := FormatMoney(it.Price);
       FGridPrice.Cells[4, r] := IntToStr(it.Count);
-      if IsPriceModified(it) then
-        FGridPrice.Cells[5, r] := 'تغییر یافته'
+      if not IsPriceModified(it) then
+        FGridPrice.Cells[5, r] := ''
+      else if FOriginal.TryGetValue(it.Code, orig) and (orig > 0) then
+        FGridPrice.Cells[5, r] := Format('قبلی: %s  (%s%.1f٪)',
+          [FormatMoney(orig), IfThen(it.Price >= orig, '+', ''),
+          (it.Price - orig) * 100.0 / orig])
       else
-        FGridPrice.Cells[5, r] := '';
+        FGridPrice.Cells[5, r] := 'تغییر یافته';
       FGridPrice.Objects[0, r] := it;
       Inc(r);
     end;
@@ -1819,15 +2047,11 @@ end;
 
 procedure TForm1.UpdateChangesLabel;
 var
-  it: TPriceItem;
   c: Integer;
 begin
   if FLblChanges = nil then
     Exit;
-  c := 0;
-  for it in FPrices do
-    if IsPriceModified(it) then
-      Inc(c);
+  c := PendingPriceCount;
   if c = 0 then
     FLblChanges.Caption := ''
   else
@@ -1852,15 +2076,15 @@ begin
     Exit;
   term := '';
   if FEdCatSearch <> nil then
-    term := Trim(FEdCatSearch.Text);
+    term := NormalizeText(FEdCatSearch.Text);
   FUpdating := True;
   try
     FGridCatalog.RowCount := 1;
     r := 1;
     for it in FPrices do
     begin
-      if (term <> '') and (Pos(term, it.Code) = 0) and
-        (Pos(term, it.DisplayName) = 0) then
+      if (term <> '') and (Pos(term, NormalizeText(it.Code)) = 0) and
+        (Pos(term, NormalizeText(it.DisplayName)) = 0) then
         Continue;
       FGridCatalog.RowCount := r + 1;
       FGridCatalog.Cells[0, r] := it.DisplayName;
@@ -1915,9 +2139,18 @@ begin
 end;
 
 procedure TForm1.BtnSaveClick(Sender: TObject);
+begin
+  if PendingPriceCount = 0 then
+    SetStatus('تغییری برای ذخیره وجود ندارد.')
+  else
+    DoSavePrices;
+end;
+
+function TForm1.DoSavePrices: Boolean;
 var
   it: TPriceItem;
   ok, fail: Integer;
+  old: Int64;
 begin
   ok := 0;
   fail := 0;
@@ -1927,8 +2160,11 @@ begin
     begin
       if not IsPriceModified(it) then
         Continue;
+      if not FOriginal.TryGetValue(it.Code, old) then
+        old := -1;
       if FData.SavePrice(it.Code, it.Price) then
       begin
+        LogPriceChange(it.Code, old, it.Price, 'ویرایش');
         FOriginal.AddOrSetValue(it.Code, it.Price);
         Inc(ok);
       end
@@ -1938,9 +2174,13 @@ begin
   finally
     Screen.Cursor := crDefault;
   end;
-  UpdateChangesLabel;
+  Result := fail = 0;
+  if ok > 0 then
+    FPctBackup.Clear;
+  FillPriceGrid;
+  FillLogGrid;
   if fail = 0 then
-    SetStatus(IntToStr(ok) + ' تغییر با موفقیت ذخیره شد.')
+    SetStatus(IntToStr(ok) + ' تغییر با موفقیت ذخیره شد و در تاریخچه ثبت شد.')
   else
     Application.MessageBox(PChar(IntToStr(fail) + ' ردیف ذخیره نشد.' +
       sLineBreak + FData.LastError), 'خطا در ذخیره', MB_OK or MB_ICONERROR);
@@ -2034,39 +2274,21 @@ var
   it: TPriceItem;
 begin
   g := Sender as TStringGrid;
-  if gdFixed in State then
-  begin
-    g.Canvas.Brush.Color := C_NAVY;
-    g.Canvas.Font.Color := clWhite;
-    g.Canvas.Font.Style := [fsBold];
-  end
-  else if gdSelected in State then
-  begin
-    g.Canvas.Brush.Color := C_SEL;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-  end
-  else
-  begin
-    if Odd(ARow) then
-      g.Canvas.Brush.Color := C_ALT
-    else
-      g.Canvas.Brush.Color := clWhite;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-  end;
-  g.Canvas.FillRect(Rect);
-  DrawGridFrame(g, Rect);
-  if (ACol = 3) and (ARow >= 1) and (not(gdFixed in State)) then
+  PrepareCell(g, ARow, State);
+  if (ARow >= 1) and not(gdFixed in State) then
   begin
     it := TPriceItem(g.Objects[0, ARow]);
-    if (it <> nil) and IsPriceModified(it) then
+    if (it <> nil) and IsPriceModified(it) and (ACol in [3, 5]) then
     begin
       g.Canvas.Font.Color := C_DANGER;
       g.Canvas.Font.Style := [fsBold];
-    end;
+    end
+    else if (it <> nil) and (ACol = 3) and (it.Price <= 1) then
+      g.Canvas.Font.Color := C_MUTED
+    else if ACol = 0 then
+      g.Canvas.Font.Color := C_ACCENT;
   end;
-  DrawGridText(g, ACol, ARow, Rect, g.Cells[ACol, ARow], GridColAlign(g, ACol));
+  FinishCell(g, ACol, ARow, Rect);
 end;
 
 procedure TForm1.GridMatrixDrawCell(Sender: TObject; ACol, ARow: Integer;
@@ -2075,34 +2297,29 @@ var
   g: TStringGrid;
 begin
   g := Sender as TStringGrid;
-  if gdFixed in State then
+  PrepareCell(g, ARow, State);
+  if not(gdFixed in State) then
   begin
-    g.Canvas.Brush.Color := C_NAVY;
-    g.Canvas.Font.Color := clWhite;
-    g.Canvas.Font.Style := [fsBold];
-  end
-  else if gdSelected in State then
-  begin
-    g.Canvas.Brush.Color := C_SEL;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-  end
-  else
-  begin
-    if Odd(ARow) then
-      g.Canvas.Brush.Color := C_ALT
-    else
-      g.Canvas.Brush.Color := clWhite;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
     if (ACol >= 4) and (ACol <= 5) then
       g.Canvas.Font.Style := [fsBold];
     if ACol = 0 then
+    begin
       g.Canvas.Font.Color := C_ACCENT;
+      g.Canvas.Font.Style := [fsBold];
+    end;
+    { ستون سود: سبز برای سود، قرمز برای زیان }
+    if (ACol = 7) and (g.Cells[ACol, ARow] <> '—') then
+    begin
+      g.Canvas.Font.Style := [fsBold];
+      if StartsStr('-', g.Cells[ACol, ARow]) then
+        g.Canvas.Font.Color := C_DANGER
+      else
+        g.Canvas.Font.Color := C_SUCCESS;
+    end;
+    if g.Cells[ACol, ARow] = '—' then
+      g.Canvas.Font.Color := C_MUTED;
   end;
-  g.Canvas.FillRect(Rect);
-  DrawGridFrame(g, Rect);
-  DrawGridText(g, ACol, ARow, Rect, g.Cells[ACol, ARow], GridColAlign(g, ACol));
+  FinishCell(g, ACol, ARow, Rect);
 end;
 
 procedure TForm1.EdCatSearchChange(Sender: TObject);
@@ -2119,23 +2336,22 @@ procedure TForm1.BtnAddClick(Sender: TObject);
 var
   it: TPriceItem;
   line: TCartLine;
-  i: Integer;
-  found: Boolean;
+  i, sel: Integer;
 begin
   if (FGridCatalog = nil) or (FGridCatalog.Row < 1) then
     Exit;
   it := TPriceItem(FGridCatalog.Objects[0, FGridCatalog.Row]);
   if it = nil then
     Exit;
-  found := False;
-  for line in FCart do
-    if SameText(line.Code, it.Code) then
+  sel := -1;
+  for i := 0 to FCart.Count - 1 do
+    if SameText(FCart[i].Code, it.Code) then
     begin
-      Inc(line.Qty);
-      found := True;
+      Inc(FCart[i].Qty);
+      sel := i;
       Break;
     end;
-  if not found then
+  if sel < 0 then
   begin
     line := TCartLine.Create;
     line.Code := it.Code;
@@ -2143,31 +2359,38 @@ begin
     line.Qty := 1;
     line.UnitPrice := it.Price;
     line.Cost := EstimatedCostOf(it.Code);
-    FCart.Add(line);
+    sel := FCart.Add(line);
   end;
-  RefreshCart;
+  RefreshCart(sel);
   SetStatus('«' + it.DisplayName + '» به سبد سفارش افزوده شد.');
 end;
 
 procedure TForm1.BtnRemoveClick(Sender: TObject);
 var
-  line: TCartLine;
   i: Integer;
 begin
   i := FGridCart.Row;
   if (i < 1) or (i > FCart.Count) then
     Exit;
   FCart.Delete(i - 1);
-  RefreshCart;
+  RefreshCart(Min(i - 1, FCart.Count - 1));
 end;
 
 procedure TForm1.BtnClearCartClick(Sender: TObject);
 begin
+  if FCart.Count = 0 then
+    Exit;
+  if Application.MessageBox('همه اقلام سبد سفارش پاک شود؟', 'پاک کردن سبد',
+    MB_YESNO or MB_ICONQUESTION) <> IDYES then
+    Exit;
   FCart.Clear;
+  FEdCustomer.Text := '';
+  FCustomerMobile := '';
+  FEdDisc.Text := '0';
   RefreshCart;
 end;
 
-procedure TForm1.RefreshCart;
+procedure TForm1.RefreshCart(ASelect: Integer);
 var
   i: Integer;
   line: TCartLine;
@@ -2187,7 +2410,9 @@ begin
       FGridCart.Cells[4, i + 1] := FormatMoney(line.Total);
       FGridCart.Objects[0, i + 1] := line;
     end;
-    if FGridCart.RowCount > 1 then
+    if (ASelect >= 0) and (ASelect < FCart.Count) then
+      FGridCart.Row := ASelect + 1
+    else if FGridCart.RowCount > 1 then
       FGridCart.Row := 1;
   finally
     FUpdating := False;
@@ -2207,10 +2432,8 @@ begin
     subtotal := subtotal + line.Total;
     totalCost := totalCost + (Int64(line.Qty) * line.Cost);
   end;
-  disc := ParseMoney(FEdDisc.Text);
+  disc := DiscountValue(subtotal);
   payable := subtotal - disc;
-  if payable < 0 then
-    payable := 0;
   profit := payable - totalCost;
   if FLblSubtotal <> nil then
     FLblSubtotal.Caption := FormatToman(subtotal);
@@ -2219,6 +2442,9 @@ begin
   if FLblProfit <> nil then
   begin
     FLblProfit.Caption := FormatToman(profit);
+    if payable > 0 then
+      FLblProfit.Caption := FLblProfit.Caption +
+        Format('   (حاشیه سود %.0f٪)', [profit * 100.0 / payable]);
     if profit < 0 then
       FLblProfit.Font.Color := C_DANGER
     else
@@ -2269,32 +2495,18 @@ var
   g: TStringGrid;
 begin
   g := Sender as TStringGrid;
-  if gdFixed in State then
+  PrepareCell(g, ARow, State);
+  if not(gdFixed in State) then
   begin
-    g.Canvas.Brush.Color := C_NAVY;
-    g.Canvas.Font.Color := clWhite;
-    g.Canvas.Font.Style := [fsBold];
-  end
-  else if gdSelected in State then
-  begin
-    g.Canvas.Brush.Color := C_SEL;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-  end
-  else
-  begin
-    if Odd(ARow) then
-      g.Canvas.Brush.Color := C_ALT
-    else
-      g.Canvas.Brush.Color := clWhite;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
     if ACol = 3 then
+      g.Canvas.Font.Color := C_MUTED;
+    if ACol = 4 then
+    begin
       g.Canvas.Font.Color := C_ACCENT;
+      g.Canvas.Font.Style := [fsBold];
+    end;
   end;
-  g.Canvas.FillRect(Rect);
-  DrawGridFrame(g, Rect);
-  DrawGridText(g, ACol, ARow, Rect, g.Cells[ACol, ARow], GridColAlign(g, ACol));
+  FinishCell(g, ACol, ARow, Rect);
 end;
 
 procedure TForm1.EdDiscChange(Sender: TObject);
@@ -2330,6 +2542,28 @@ begin
   end;
 end;
 
+function TForm1.DiscountValue(Subtotal: Int64): Int64;
+var
+  t: string;
+  pct: Double;
+begin
+  { تخفیف یا مبلغ است یا درصد (با علامت ٪ یا %) }
+  t := Trim(FEdDisc.Text);
+  if (Pos('%', t) > 0) or (Pos('٪', t) > 0) then
+  begin
+    if ParsePercentText(t, pct) then
+      Result := Round(Subtotal * pct / 100.0)
+    else
+      Result := 0;
+  end
+  else
+    Result := ParseMoney(t);
+  if Result < 0 then
+    Result := 0;
+  if Result > Subtotal then
+    Result := Subtotal;
+end;
+
 function TForm1.InvoiceText(out DocNo: string; out Revenue, Cost, Profit,
   Discount, Payable: Int64): string;
 var
@@ -2344,8 +2578,8 @@ begin
     Revenue := Revenue + line.Total;
     Cost := Cost + Int64(line.Qty) * line.Cost;
   end;
-  Discount := ParseMoney(FEdDisc.Text);
-  Payable := Max(0, Revenue - Discount);
+  Discount := DiscountValue(Revenue);
+  Payable := Revenue - Discount;
   Profit := Payable - Cost;
   txt := 'صورت‌حساب استودیو عکاسی سبز' + sLineBreak;
   txt := txt + 'شماره: ' + DocNo + sLineBreak;
@@ -2353,14 +2587,18 @@ begin
     FormatDateTime('hh:nn', Now) + sLineBreak;
   if Trim(FEdCustomer.Text) <> '' then
     txt := txt + 'مشتری: ' + Trim(FEdCustomer.Text) + sLineBreak;
+  if FCustomerMobile <> '' then
+    txt := txt + 'موبایل: ' + FCustomerMobile + sLineBreak;
   txt := txt + '----------------------------------------' + sLineBreak;
   for line in FCart do
     txt := txt + Format('%s ×%d = %s',
       [line.Title, line.Qty, FormatToman(line.Total)]) + sLineBreak;
   txt := txt + '----------------------------------------' + sLineBreak;
   txt := txt + 'جمع فروش: ' + FormatToman(Revenue) + sLineBreak;
-  txt := txt + 'تخفیف: ' + FormatToman(Discount) + sLineBreak;
+  if Discount > 0 then
+    txt := txt + 'تخفیف: ' + FormatToman(Discount) + sLineBreak;
   txt := txt + 'قابل پرداخت: ' + FormatToman(Payable) + sLineBreak;
+  txt := txt + '(' + NumberToPersianWords(Payable) + ' تومان)' + sLineBreak;
   Result := txt;
 end;
 
@@ -2371,47 +2609,80 @@ begin
   Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
 end;
 
-function TForm1.InvoiceHTML(out DocNo: string): string;
+function TForm1.InvoiceHTML(const DocNo: string): string;
 var
   line: TCartLine;
-  rows: string;
+  rows, dummy, cust: string;
   rev, cost, prof, disc, pay: Int64;
+  n: Integer;
 begin
-  InvoiceText(DocNo, rev, cost, prof, disc, pay);
+  InvoiceText(dummy, rev, cost, prof, disc, pay);
   rows := '';
+  n := 0;
   for line in FCart do
+  begin
+    Inc(n);
     rows := rows + Format
-      ('<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>' + sLineBreak,
-      [HtmlEsc(line.Title), line.Qty, FormatMoney(line.UnitPrice),
+      ('<tr><td class="c">%s</td><td>%s</td><td class="c">%s</td>' +
+      '<td>%s</td><td><b>%s</b></td></tr>' + sLineBreak,
+      [ToPersianDigits(IntToStr(n)), HtmlEsc(line.Title),
+      ToPersianDigits(IntToStr(line.Qty)), FormatMoney(line.UnitPrice),
       FormatMoney(line.Total)]);
+  end;
+  cust := '';
+  if Trim(FEdCustomer.Text) <> '' then
+    cust := '<div><span>مشتری:</span> ' + HtmlEsc(Trim(FEdCustomer.Text)) +
+      '</div>';
+  if FCustomerMobile <> '' then
+    cust := cust + '<div><span>موبایل:</span> ' + HtmlEsc(FCustomerMobile) +
+      '</div>';
   Result :=
     '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">' +
     '<title>فاکتور ' + DocNo + '</title><style>' +
     '@page{size:A5 portrait;margin:8mm;}' +
-    'body{font-family:Tahoma,serif;font-size:11px;color:#212529;}' +
-    'h1{font-size:16px;text-align:center;margin:0 0 2mm;}' +
-    '.meta{font-size:10px;color:#555;margin-bottom:2mm;}' +
-    'table{width:100%;border-collapse:collapse;margin-top:2mm;}' +
-    'th,td{border:1px solid #ccc;padding:2px 4px;text-align:right;}' +
-    'th{background:#eef1f4;}' +
-    '.tot{margin-top:3mm;width:100%;}' +
-    '.tot td{border:none;padding:1px 4px;}' +
-    '.big{font-size:14px;font-weight:bold;color:#1f8a70;}' +
+    '*{box-sizing:border-box;}' +
+    'body{font-family:Tahoma,serif;font-size:11px;color:#212529;margin:0;}' +
+    '.hd{display:flex;justify-content:space-between;align-items:center;' +
+    'border-bottom:3px solid #1f8a70;padding-bottom:2mm;margin-bottom:2mm;}' +
+    '.hd h1{font-size:17px;margin:0;color:#1b2430;}' +
+    '.hd .sub{font-size:9px;color:#1f8a70;}' +
+    '.meta{font-size:10px;color:#444;text-align:left;line-height:1.6;}' +
+    '.cust{display:flex;gap:6mm;font-size:10px;margin:1mm 0 2mm;}' +
+    '.cust span,.meta span{color:#888;}' +
+    'table{width:100%;border-collapse:collapse;}' +
+    'th,td{border:1px solid #d5d9dd;padding:3px 5px;text-align:right;}' +
+    'th{background:#1b2430;color:#fff;font-weight:bold;}' +
+    'tbody tr:nth-child(even){background:#f6f8f9;}' +
+    '.c{text-align:center;}' +
+    '.tot{margin-top:3mm;width:60%;margin-right:auto;}' +
+    '.tot td{border:none;padding:2px 5px;}' +
+    '.big td{font-size:14px;font-weight:bold;color:#1f8a70;' +
+    'border-top:2px solid #1f8a70;}' +
+    '.words{margin-top:2mm;padding:2mm;background:#eef7f3;border-radius:2mm;' +
+    'font-size:10px;}' +
+    '.sign{display:flex;justify-content:space-between;margin-top:10mm;' +
+    'font-size:10px;color:#666;}' +
     '.foot{margin-top:6mm;font-size:9px;color:#777;text-align:center;}' +
     '</style></head><body onload="window.print()">' +
-    '<h1>استودیو عکاسی سبز</h1>' +
-    '<div class="meta">شماره فاکتور: ' + DocNo + '<br>تاریخ: ' + JalaliToday +
-    ' &nbsp; ساعت: ' + FormatDateTime('hh:nn', Now) +
-    (IfThen(Trim(FEdCustomer.Text) <> '',
-    '<br>مشتری: ' + HtmlEsc(Trim(FEdCustomer.Text)), '')) + '</div>' +
-    '<table><thead><tr><th>شرح</th><th>تعداد</th><th>قیمت واحد</th>' +
-    '<th>جمع</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="hd"><div><h1>استودیو عکاسی سبز</h1>' +
+    '<div class="sub">صورت‌حساب فروش</div></div>' +
+    '<div class="meta"><span>شماره:</span> ' + DocNo +
+    '<br><span>تاریخ:</span> ' + ToPersianDigits(JalaliToday) +
+    ' &nbsp; <span>ساعت:</span> ' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
+    '</div></div>' +
+    IfThen(cust <> '', '<div class="cust">' + cust + '</div>', '') +
+    '<table><thead><tr><th class="c">#</th><th>شرح</th><th class="c">تعداد</th>' +
+    '<th>قیمت واحد</th><th>جمع</th></tr></thead><tbody>' + rows +
+    '</tbody></table>' +
     '<table class="tot">' +
     '<tr><td>جمع فروش:</td><td>' + FormatToman(rev) + '</td></tr>' +
-    '<tr><td>تخفیف:</td><td>' + FormatToman(disc) + '</td></tr>' +
-    '<tr><td class="big">قابل پرداخت:</td><td class="big">' +
-    FormatToman(pay) + '</td></tr>' +
-    '</table>' +
+    IfThen(disc > 0, '<tr><td>تخفیف:</td><td>' + FormatToman(disc) +
+    '</td></tr>', '') +
+    '<tr class="big"><td>قابل پرداخت:</td><td>' + FormatToman(pay) +
+    '</td></tr></table>' +
+    '<div class="words">مبلغ به حروف: ' + NumberToPersianWords(pay) +
+    ' تومان</div>' +
+    '<div class="sign"><div>امضای مشتری</div><div>مهر و امضای استودیو</div></div>' +
     '<div class="foot">با تشکر از اعتماد شما — استودیو عکاسی سبز</div>' +
     '</body></html>';
 end;
@@ -2421,6 +2692,11 @@ var
   doc: string;
   rev, cost, prof, disc, pay: Int64;
 begin
+  if FCart.Count = 0 then
+  begin
+    SetStatus('سبد سفارش خالی است.');
+    Exit;
+  end;
   Clipboard.AsText := InvoiceText(doc, rev, cost, prof, disc, pay);
   SetStatus('صورت‌حساب کپی شد. شماره: ' + doc);
 end;
@@ -2438,7 +2714,7 @@ begin
   end;
   txt := InvoiceText(doc, rev, cost, prof, disc, pay);
   html := InvoiceHTML(doc);
-  dir := ExtractFilePath(Application.ExeName) + 'Factures';
+  dir := AppDir + 'Factures';
   ForceDirectories(dir);
   fn := dir + PathDelim + doc;
   sl := TStringList.Create;
@@ -2467,7 +2743,7 @@ begin
     Exit;
   end;
   InvoiceText(doc, rev, cost, prof, disc, pay);
-  dir := ExtractFilePath(Application.ExeName) + 'Factures';
+  dir := AppDir + 'Factures';
   ForceDirectories(dir);
   fn := dir + PathDelim + doc + '.html';
   sl := TStringList.Create;
@@ -2485,7 +2761,7 @@ procedure TForm1.BtnOpenFacturesClick(Sender: TObject);
 var
   dir: string;
 begin
-  dir := ExtractFilePath(Application.ExeName) + 'Factures';
+  dir := AppDir + 'Factures';
   ForceDirectories(dir);
   ShellExecute(0, 'explore', PChar(dir), nil, nil, SW_SHOWNORMAL);
   SetStatus('پوشه فاکتورهای ذخیره‌شده باز شد.');
@@ -2611,32 +2887,666 @@ var
   g: TStringGrid;
 begin
   g := Sender as TStringGrid;
-  if gdFixed in State then
+  PrepareCell(g, ARow, State);
+  if (ACol = 1) and not(gdFixed in State) then
   begin
-    g.Canvas.Brush.Color := C_NAVY;
-    g.Canvas.Font.Color := clWhite;
+    g.Canvas.Font.Color := C_ACCENT;
     g.Canvas.Font.Style := [fsBold];
-  end
-  else if gdSelected in State then
-  begin
-    g.Canvas.Brush.Color := C_SEL;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-  end
-  else
-  begin
-    if Odd(ARow) then
-      g.Canvas.Brush.Color := C_ALT
-    else
-      g.Canvas.Brush.Color := clWhite;
-    g.Canvas.Font.Color := C_TEXT;
-    g.Canvas.Font.Style := [];
-    if ACol = 1 then
-      g.Canvas.Font.Color := C_ACCENT;
   end;
-  g.Canvas.FillRect(Rect);
-  DrawGridFrame(g, Rect);
-  DrawGridText(g, ACol, ARow, Rect, g.Cells[ACol, ARow], GridColAlign(g, ACol));
+  FinishCell(g, ACol, ARow, Rect);
+end;
+
+{ ------------------------------ تنظیمات ---------------------------------- }
+
+procedure TForm1.LoadSettings;
+var
+  ini: TMemIniFile;
+  cs: string;
+begin
+  FExcelPath := PriceXlsPath;
+  if not FileExists(AppDir + SettingsFile) then
+    Exit;
+  try
+    ini := TMemIniFile.Create(AppDir + SettingsFile, TEncoding.UTF8);
+    try
+      FExcelPath := ini.ReadString('Excel', 'Path', PriceXlsPath);
+      cs := Trim(ini.ReadString('Database', 'ConnectionString', ''));
+      if cs <> '' then
+        FData.ConnStr := cs;
+    finally
+      ini.Free;
+    end;
+  except
+    FExcelPath := PriceXlsPath;
+  end;
+end;
+
+procedure TForm1.SaveSettings;
+var
+  ini: TMemIniFile;
+begin
+  try
+    ini := TMemIniFile.Create(AppDir + SettingsFile, TEncoding.UTF8);
+    try
+      ini.WriteString('Excel', 'Path', FExcelPath);
+      ini.UpdateFile;
+    finally
+      ini.Free;
+    end;
+  except
+    SetStatus('ذخیره تنظیمات ممکن نشد (دسترسی نوشتن در پوشه برنامه؟)');
+  end;
+end;
+
+function TForm1.ResolveExcelPath: Boolean;
+var
+  dlg: TOpenDialog;
+begin
+  Result := FileExists(FExcelPath);
+  if Result then
+    Exit;
+  if Application.MessageBox(PChar('فایل اکسل قیمت پیدا نشد:' + sLineBreak +
+    FExcelPath + sLineBreak + sLineBreak +
+    'می‌خواهید محل فایل را انتخاب کنید؟ (مسیر برای دفعات بعد ذخیره می‌شود)'),
+    'فایل اکسل', MB_YESNO or MB_ICONQUESTION) <> IDYES then
+    Exit;
+  dlg := TOpenDialog.Create(Self);
+  try
+    dlg.Title := 'انتخاب فایل اکسل قیمت (Price.xls)';
+    dlg.Filter := 'فایل اکسل|*.xls;*.xlsx|همه فایل‌ها|*.*';
+    dlg.Options := dlg.Options + [ofFileMustExist];
+    if dlg.Execute then
+    begin
+      FExcelPath := dlg.FileName;
+      SaveSettings;
+      Result := True;
+    end;
+  finally
+    dlg.Free;
+  end;
+end;
+
+{ --------------------------- ایندکس قیمت‌ها ------------------------------ }
+
+procedure TForm1.RebuildIndex;
+var
+  it: TPriceItem;
+  key: string;
+begin
+  FIndex.Clear;
+  for it in FPrices do
+  begin
+    key := LowerCase(Trim(it.Code));
+    if not FIndex.ContainsKey(key) then
+      FIndex.Add(key, it);
+  end;
+end;
+
+function TForm1.FindItem(const Code: string): TPriceItem;
+begin
+  if not FIndex.TryGetValue(LowerCase(Trim(Code)), Result) then
+    Result := nil;
+end;
+
+{ ----------------------- تغییرات ذخیره‌نشده ------------------------------ }
+
+function TForm1.PendingPriceCount: Integer;
+var
+  it: TPriceItem;
+begin
+  Result := 0;
+  for it in FPrices do
+    if IsPriceModified(it) then
+      Inc(Result);
+end;
+
+function TForm1.ConfirmPending(IncludeCost: Boolean): Boolean;
+var
+  n, costN: Integer;
+begin
+  n := PendingPriceCount;
+  costN := 0;
+  if IncludeCost then
+    costN := FCostDraft.Count;
+  if n + costN = 0 then
+    Exit(True);
+  case Application.MessageBox(PChar(Format('%d تغییر ذخیره‌نشده وجود دارد.%s' +
+    'قبل از ادامه ذخیره شود؟%s(«خیر» = نادیده گرفتن تغییرات)',
+    [n + costN, sLineBreak, sLineBreak])), 'تغییرات ذخیره‌نشده',
+    MB_YESNOCANCEL or MB_ICONQUESTION) of
+    IDYES:
+      begin
+        Result := True;
+        if n > 0 then
+          Result := DoSavePrices;
+        if Result and (costN > 0) then
+          Result := DoSaveCosts;
+      end;
+    IDNO:
+      Result := True;
+  else
+    Result := False;
+  end;
+end;
+
+procedure TForm1.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+begin
+  CanClose := ConfirmPending(True);
+end;
+
+{ ------------------------------ میان‌برها -------------------------------- }
+
+procedure TForm1.FormKeyDown(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+var
+  ed: TEdit;
+begin
+  if (Shift = []) and (Key >= VK_F1) and (Key <= VK_F6) then
+  begin
+    ShowPage(Key - VK_F1);
+    Key := 0;
+    Exit;
+  end;
+
+  if Shift = [ssCtrl] then
+  begin
+    case Key of
+      Ord('S'):
+        begin
+          case FCurrentPage of
+            2:
+              BtnSaveClick(nil);
+            3:
+              BtnSaveInvoiceClick(nil);
+            4:
+              BtnCostSaveClick(nil);
+          end;
+          Key := 0;
+        end;
+      Ord('F'):
+        begin
+          case FCurrentPage of
+            2:
+              ed := FEdPriceSearch;
+            3:
+              ed := FEdCatSearch;
+            5:
+              ed := FEdPeopleSearch;
+          else
+            ed := nil;
+          end;
+          if (ed <> nil) and ed.CanFocus then
+          begin
+            ed.SetFocus;
+            ed.SelectAll;
+          end;
+          Key := 0;
+        end;
+      Ord('R'):
+        begin
+          BtnReconnectClick(nil);
+          Key := 0;
+        end;
+      Ord('P'):
+        if FCurrentPage = 3 then
+        begin
+          BtnPrintInvoiceClick(nil);
+          Key := 0;
+        end;
+    end;
+    Exit;
+  end;
+
+  if Shift = [] then
+  begin
+    if (Key = VK_RETURN) and (ActiveControl = FGridCatalog) then
+    begin
+      BtnAddClick(nil);
+      Key := 0;
+    end
+    else if (Key = VK_RETURN) and (ActiveControl = FGridPeople) then
+    begin
+      PickSelectedPerson(nil);
+      Key := 0;
+    end
+    else if (Key = VK_DELETE) and (ActiveControl = FGridCart) then
+    begin
+      BtnRemoveClick(nil);
+      Key := 0;
+    end;
+  end;
+end;
+
+procedure TForm1.EdSearchKeyPress(Sender: TObject; var Key: Char);
+begin
+  if Key <> #13 then
+    Exit;
+  Key := #0;
+  if Sender = FEdCatSearch then
+    BtnAddClick(nil)
+  else if Sender = FEdPeopleSearch then
+  begin
+    if FPeopleTimer.Enabled then
+      RunPeopleSearch
+    else
+      PickSelectedPerson(nil);
+  end;
+end;
+
+{ ------------------------- تاریخچه تغییر قیمت ---------------------------- }
+
+procedure TForm1.LogPriceChange(const Code: string; OldV, NewV: Int64;
+  const Source: string);
+var
+  fn, line, oldS, pctS: string;
+  fs: TFileStream;
+  isNew: Boolean;
+  bytes: TBytes;
+  inv: TFormatSettings;
+begin
+  fn := AppDir + PriceLogFile;
+  inv := TFormatSettings.Create;
+  inv.DecimalSeparator := '.';
+  if OldV < 0 then
+    oldS := ''
+  else
+    oldS := IntToStr(OldV);
+  if OldV > 0 then
+    pctS := FormatFloat('0.0', (NewV - OldV) * 100.0 / OldV, inv)
+  else
+    pctS := '';
+  line := JalaliToday + ',' + FormatDateTime('hh:nn', Now) + ',' +
+    StringReplace(Code, ',', ' ', [rfReplaceAll]) + ',' + oldS + ',' +
+    IntToStr(NewV) + ',' + pctS + ',' + Source + sLineBreak;
+  try
+    isNew := not FileExists(fn);
+    if isNew then
+      fs := TFileStream.Create(fn, fmCreate)
+    else
+    begin
+      fs := TFileStream.Create(fn, fmOpenReadWrite or fmShareDenyWrite);
+      fs.Seek(0, soEnd);
+    end;
+    try
+      if isNew then
+      begin
+        bytes := TEncoding.UTF8.GetPreamble;
+        if Length(bytes) > 0 then
+          fs.WriteBuffer(bytes[0], Length(bytes));
+        bytes := TEncoding.UTF8.GetBytes
+          ('تاریخ,ساعت,کد,قیمت قبلی,قیمت جدید,درصد تغییر,منبع' + sLineBreak);
+        fs.WriteBuffer(bytes[0], Length(bytes));
+      end;
+      bytes := TEncoding.UTF8.GetBytes(line);
+      fs.WriteBuffer(bytes[0], Length(bytes));
+    finally
+      fs.Free;
+    end;
+  except
+    { خطای ثبت تاریخچه نباید ذخیره قیمت را مختل کند (مثلاً فایل در اکسل باز است) }
+  end;
+end;
+
+procedure TForm1.FillLogGrid;
+var
+  sl: TStringList;
+  i, c, r: Integer;
+  parts: TArray<string>;
+  fn: string;
+begin
+  if FGridLog = nil then
+    Exit;
+  fn := AppDir + PriceLogFile;
+  FGridLog.RowCount := 2;
+  for c := 0 to FGridLog.ColCount - 1 do
+    FGridLog.Cells[c, 1] := '';
+  FGridLog.Cells[2, 1] := 'هنوز تغییری ثبت نشده';
+  if not FileExists(fn) then
+    Exit;
+  sl := TStringList.Create;
+  try
+    try
+      sl.LoadFromFile(fn, TEncoding.UTF8);
+    except
+      Exit;
+    end;
+    r := 0;
+    for i := sl.Count - 1 downto 1 do
+    begin
+      if r >= 300 then
+        Break;
+      parts := sl[i].Split([',']);
+      if Length(parts) < 6 then
+        Continue;
+      Inc(r);
+      FGridLog.RowCount := r + 1;
+      FGridLog.Cells[0, r] := ToPersianDigits(parts[0]);
+      FGridLog.Cells[1, r] := ToPersianDigits(parts[1]);
+      FGridLog.Cells[2, r] := parts[2];
+      if parts[3] = '' then
+        FGridLog.Cells[3, r] := '—'
+      else
+        FGridLog.Cells[3, r] := FormatMoney(StrToInt64Def(parts[3], 0));
+      FGridLog.Cells[4, r] := FormatMoney(StrToInt64Def(parts[4], 0));
+      if parts[5] = '' then
+        FGridLog.Cells[5, r] := 'جدید'
+      else if StartsStr('-', parts[5]) then
+        FGridLog.Cells[5, r] := parts[5] + '٪'
+      else
+        FGridLog.Cells[5, r] := '+' + parts[5] + '٪';
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+procedure TForm1.GridLogDrawCell(Sender: TObject; ACol, ARow: Integer;
+  Rect: TRect; State: TGridDrawState);
+var
+  g: TStringGrid;
+  v: string;
+begin
+  g := Sender as TStringGrid;
+  PrepareCell(g, ARow, State);
+  if not(gdFixed in State) then
+  begin
+    v := g.Cells[ACol, ARow];
+    if ACol = 2 then
+      g.Canvas.Font.Color := C_ACCENT
+    else if (ACol = 5) and (v <> '') then
+    begin
+      g.Canvas.Font.Style := [fsBold];
+      if v = 'جدید' then
+        g.Canvas.Font.Color := C_GOLD
+      else if StartsStr('-', v) then
+        g.Canvas.Font.Color := C_DANGER
+      else
+        g.Canvas.Font.Color := C_SUCCESS;
+    end
+    else if ACol = 4 then
+      g.Canvas.Font.Style := [fsBold];
+  end;
+  FinishCell(g, ACol, ARow, Rect);
+end;
+
+procedure TForm1.GridCostDrawCell(Sender: TObject; ACol, ARow: Integer;
+  Rect: TRect; State: TGridDrawState);
+var
+  g: TStringGrid;
+begin
+  g := Sender as TStringGrid;
+  PrepareCell(g, ARow, State);
+  if not(gdFixed in State) then
+  begin
+    if ACol = 0 then
+    begin
+      g.Canvas.Font.Color := C_ACCENT;
+      g.Canvas.Font.Style := [fsBold];
+    end
+    else if (ACol >= 1) and (ACol <= 3) and (ARow >= 1) then
+    begin
+      if FCostDraft.ContainsKey(CostPrefixes[ACol] + g.Cells[0, ARow]) then
+      begin
+        g.Canvas.Font.Color := C_DANGER;
+        g.Canvas.Font.Style := [fsBold];
+      end
+      else if g.Cells[ACol, ARow] = '—' then
+        g.Canvas.Font.Color := C_MUTED;
+    end;
+  end;
+  FinishCell(g, ACol, ARow, Rect);
+end;
+
+{ --------------------------- مشتریان (فازی) ------------------------------ }
+
+procedure TForm1.BuildPeoplePage;
+var
+  page, card, toolbar, hdr: TPanel;
+begin
+  page := MakePanel(Self, C_BG);
+  page.Parent := Self;
+  page.Align := alClient;
+  page.Visible := False;
+  FPages[5] := page;
+
+  hdr := MakePanel(page, C_BG);
+  hdr.Align := alTop;
+  hdr.Height := 46;
+  with MakeLabel(hdr, 'مشتریان — جستجوی هوشمند', C_TEXT, 13, True) do
+  begin
+    Align := alClient;
+    AutoSize := False;
+    Layout := tlCenter;
+  end;
+
+  card := NewCard(page, '');
+  card.Parent := page;
+  card.Align := alClient;
+
+  toolbar := MakePanel(card, C_CARD);
+  toolbar.Align := alTop;
+  toolbar.Height := 52;
+
+  FEdPeopleSearch := MakeEdit(toolbar, EdPeopleSearchChange);
+  FEdPeopleSearch.Left := 8;
+  FEdPeopleSearch.Top := 10;
+  FEdPeopleSearch.Width := 340;
+  FEdPeopleSearch.Height := 32;
+  FEdPeopleSearch.TextHint := 'نام، موبایل یا کد ملی... (غلط تایپی هم پیدا می‌شود)';
+  FEdPeopleSearch.OnKeyPress := EdSearchKeyPress;
+
+  with MakeButton(toolbar, 'انتخاب برای سفارش', C_ACCENT, clWhite,
+    PickSelectedPerson) do
+  begin
+    Left := 356;
+    Top := 10;
+    Width := 150;
+    Height := 32;
+  end;
+
+  FLblPeopleInfo := MakeLabel(toolbar,
+    'برای جستجو تایپ کنید. دوبار کلیک یا Enter = انتخاب برای سفارش', C_MUTED, 8);
+  FLblPeopleInfo.Left := 518;
+  FLblPeopleInfo.Top := 18;
+  FLblPeopleInfo.AutoSize := True;
+
+  FGridPeople := MakeGrid(card);
+  FGridPeople.Align := alClient;
+  FGridPeople.Options := FGridPeople.Options + [goRowSelect];
+  SetupColumns(FGridPeople,
+    ['نام', 'جنسیت', 'موبایل', 'کد ملی', 'شغل', 'تعداد سفارش', 'تطابق'],
+    [240, 70, 130, 130, 160, 90, 110]);
+  FGridPeople.OnDblClick := PickSelectedPerson;
+  FGridPeople.OnDrawCell := GridPeopleDrawCell;
+end;
+
+procedure TForm1.EdPeopleSearchChange(Sender: TObject);
+begin
+  { جستجو با کمی تأخیر تا با هر کلید پایگاه داده درگیر نشود }
+  FPeopleTimer.Enabled := False;
+  FPeopleTimer.Enabled := True;
+end;
+
+procedure TForm1.PeopleTimerTimer(Sender: TObject);
+begin
+  RunPeopleSearch;
+end;
+
+procedure TForm1.RunPeopleSearch;
+var
+  term: string;
+  p: TPerson;
+  d, maxD, r: Integer;
+  fuzzy: TList<TPair<Integer, TPerson>>;
+  pair: TPair<Integer, TPerson>;
+  seen: TDictionary<Int64, Boolean>;
+begin
+  FPeopleTimer.Enabled := False;
+  term := Trim(FEdPeopleSearch.Text);
+  FPeopleView.Clear;
+  FPeopleDist.Clear;
+  if term = '' then
+  begin
+    FillPeopleGrid;
+    FLblPeopleInfo.Caption :=
+      'برای جستجو تایپ کنید. دوبار کلیک یا Enter = انتخاب برای سفارش';
+    Exit;
+  end;
+  if not FData.IsConnected then
+  begin
+    FillPeopleGrid;
+    FLblPeopleInfo.Caption := 'اتصال به پایگاه داده برقرار نیست.';
+    Exit;
+  end;
+
+  Screen.Cursor := crHourGlass;
+  try
+    { ۱) جستجوی مستقیم در پایگاه داده }
+    if FData.SearchPeople(ToLatinDigits(term), 200, FPeopleDb) then
+      for p in FPeopleDb do
+      begin
+        FPeopleView.Add(p);
+        FPeopleDist.Add(0);
+      end;
+
+    { ۲) اگر نتیجه کم بود: جستجوی فازی روی نام‌ها (غلط تایپی، ی/ک عربی) }
+    if (FPeopleView.Count < 15) and (Length(term) >= 3) and
+      not IsDigitsOnly(term) then
+    begin
+      if not FAllPeopleLoaded then
+        FAllPeopleLoaded := FData.LoadAllPeople(FAllPeople);
+      maxD := Max(1, Length(NormalizeText(term)) div 3);
+      seen := TDictionary<Int64, Boolean>.Create;
+      fuzzy := TList<TPair<Integer, TPerson>>.Create;
+      try
+        for p in FPeopleView do
+          seen.AddOrSetValue(p.Id, True);
+        for p in FAllPeople do
+        begin
+          if seen.ContainsKey(p.Id) then
+            Continue;
+          d := FuzzyDistance(term, p.Name);
+          if d <= maxD then
+            fuzzy.Add(TPair<Integer, TPerson>.Create(d, p));
+        end;
+        fuzzy.Sort(TComparer<TPair<Integer, TPerson>>.Construct(
+          function(const A, B: TPair<Integer, TPerson>): Integer
+          begin
+            Result := A.Key - B.Key;
+          end));
+        r := 0;
+        for pair in fuzzy do
+        begin
+          if r >= 50 then
+            Break;
+          FPeopleView.Add(pair.Value);
+          FPeopleDist.Add(pair.Key);
+          Inc(r);
+        end;
+      finally
+        fuzzy.Free;
+        seen.Free;
+      end;
+    end;
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  FillPeopleGrid;
+end;
+
+procedure TForm1.FillPeopleGrid;
+var
+  i, c, exact: Integer;
+  p: TPerson;
+begin
+  FUpdating := True;
+  try
+    FGridPeople.RowCount := Max(2, FPeopleView.Count + 1);
+    for c := 0 to FGridPeople.ColCount - 1 do
+      FGridPeople.Cells[c, 1] := '';
+    FGridPeople.Objects[0, 1] := nil;
+    exact := 0;
+    for i := 0 to FPeopleView.Count - 1 do
+    begin
+      p := FPeopleView[i];
+      FGridPeople.Cells[0, i + 1] := p.Name;
+      FGridPeople.Cells[1, i + 1] := p.SexLabel;
+      FGridPeople.Cells[2, i + 1] := Trim(p.Mobile);
+      FGridPeople.Cells[3, i + 1] := Trim(p.NationalCode);
+      FGridPeople.Cells[4, i + 1] := p.Job;
+      FGridPeople.Cells[5, i + 1] := IntToStr(p.OrderCount);
+      if FPeopleDist[i] = 0 then
+      begin
+        FGridPeople.Cells[6, i + 1] := 'دقیق';
+        Inc(exact);
+      end
+      else
+        FGridPeople.Cells[6, i + 1] := 'مشابه (' + IntToStr(FPeopleDist[i]) + ')';
+      FGridPeople.Objects[0, i + 1] := p;
+    end;
+    FGridPeople.Row := 1;
+  finally
+    FUpdating := False;
+  end;
+  if Trim(FEdPeopleSearch.Text) <> '' then
+  begin
+    if FPeopleView.Count = 0 then
+      FLblPeopleInfo.Caption := 'مشتری‌ای پیدا نشد.'
+    else
+      FLblPeopleInfo.Caption := Format('%d نتیجه — %d دقیق، %d مشابه',
+        [FPeopleView.Count, exact, FPeopleView.Count - exact]);
+  end;
+end;
+
+procedure TForm1.PickSelectedPerson(Sender: TObject);
+var
+  p: TPerson;
+begin
+  if (FGridPeople = nil) or (FGridPeople.Row < 1) then
+    Exit;
+  p := TPerson(FGridPeople.Objects[0, FGridPeople.Row]);
+  if p = nil then
+    Exit;
+  FEdCustomer.Text := p.Name;
+  FCustomerMobile := Trim(p.Mobile);
+  ShowPage(3);
+  SetStatus('مشتری «' + p.Name + '» برای سفارش انتخاب شد.');
+end;
+
+procedure TForm1.GridPeopleDrawCell(Sender: TObject; ACol, ARow: Integer;
+  Rect: TRect; State: TGridDrawState);
+var
+  g: TStringGrid;
+begin
+  g := Sender as TStringGrid;
+  PrepareCell(g, ARow, State);
+  if not(gdFixed in State) then
+  begin
+    if ACol = 0 then
+      g.Canvas.Font.Style := [fsBold]
+    else if (ACol = 6) and (g.Cells[ACol, ARow] <> '') then
+    begin
+      g.Canvas.Font.Style := [fsBold];
+      if g.Cells[ACol, ARow] = 'دقیق' then
+        g.Canvas.Font.Color := C_SUCCESS
+      else
+        g.Canvas.Font.Color := C_GOLD;
+    end;
+  end;
+  FinishCell(g, ACol, ARow, Rect);
+end;
+
+procedure TForm1.BtnGoPeopleClick(Sender: TObject);
+begin
+  if (Trim(FEdPeopleSearch.Text) = '') and (Trim(FEdCustomer.Text) <> '') then
+    FEdPeopleSearch.Text := Trim(FEdCustomer.Text);
+  ShowPage(5);
+end;
+
+procedure TForm1.EdCustomerChange(Sender: TObject);
+begin
+  { نام دستی تایپ شد؛ موبایل مشتری قبلی دیگر معتبر نیست }
+  FCustomerMobile := '';
 end;
 
 initialization
