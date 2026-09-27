@@ -1,0 +1,10 @@
+; این فایل را به SabzPrice.ini تغییر نام دهید و کنار Project1.exe قرار دهید.
+; همه کلیدها اختیاری هستند؛ در صورت نبودن، مقدار پیش‌فرض استفاده می‌شود.
+
+[Excel]
+; مسیر فایل اکسل قیمت. اگر پیدا نشود برنامه خودش می‌پرسد و اینجا ذخیره می‌کند.
+Path=F:\Program sabz\Price.xls
+
+[Database]
+; رشته اتصال ADO (پیش‌فرض: SQL Server محلی، پایگاه داده SABZ با Windows Authentication)
+;ConnectionString=Provider=SQLOLEDB.1;Integrated Security=SSPI;Persist Security Info=False;Initial Catalog=SABZ;Data Source=.

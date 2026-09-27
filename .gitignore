@@ -6,3 +6,6 @@ __history/
 *.identcache
 *.stat
 *.res
+Factures/
+PriceLog.csv
+SabzPrice.ini
