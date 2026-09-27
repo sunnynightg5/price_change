@@ -195,6 +195,7 @@ begin
   if sz = '' then
     sz := c;
   sz := StringReplace(sz, '*', ' × ', [rfReplaceAll]);
+  sz := #$202A + sz + #$202C;
 
   case ClassifyCode(c) of
     pcArtReprint:

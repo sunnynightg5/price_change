@@ -2822,7 +2822,7 @@ begin
   sz := ServiceSize;
   if sz = '' then
     Exit;
-  disp := StringReplace(sz, '*', ' × ', [rfReplaceAll]);
+  disp := #$202A + StringReplace(sz, '*', ' × ', [rfReplaceAll]) + #$202C;
   pf := PriceOf('s' + sz);
   pl := PriceOf('l' + sz);
   case Kind of
@@ -2840,14 +2840,14 @@ begin
       begin
         code := 's' + sz;
         price := pf;
-        cost := pf;
+        cost := 0;
         title := 'شاسی ' + disp;
       end;
   else
     begin
       code := 'l' + sz;
       price := pl;
-      cost := pl;
+      cost := 0;
       title := 'لمینت ' + disp;
     end;
   end;
