@@ -1,4 +1,4 @@
-; این فایل را به SabzPrice.ini تغییر نام دهید و کنار Project1.exe قرار دهید.
+﻿; این فایل را به SabzPrice.ini تغییر نام دهید و کنار Project1.exe قرار دهید.
 ; همه کلیدها اختیاری هستند؛ در صورت نبودن، مقدار پیش‌فرض استفاده می‌شود.
 
 [Excel]
@@ -8,3 +8,10 @@ Path=F:\Program sabz\Price.xls
 [Database]
 ; رشته اتصال ADO (پیش‌فرض: SQL Server محلی، پایگاه داده SABZ با Windows Authentication)
 ;ConnectionString=Provider=SQLOLEDB.1;Integrated Security=SSPI;Persist Security Info=False;Initial Catalog=SABZ;Data Source=.
+
+[PrintShop]
+; نام و مشخصات چاپخانه که در هدر فاکتور A5 چاپ می‌شود.
+; اگر Name خالی باشد، هیچ خطی روی فاکتور اضافه نمی‌شود.
+Name=چاپخانه نمونه
+Phone=۰۹۱۲۳۴۵۶۷۸۹
+Address=تهران، خیابان نمونه، پلاک ۱۲

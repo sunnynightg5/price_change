@@ -45,6 +45,9 @@ type
     FPages: array [0 .. 5] of TPanel;
     FNav: array [0 .. 5] of TPanel;
     FExcelPath: string;
+    FShopName: string;
+    FShopPhone: string;
+    FShopAddress: string;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -2582,6 +2585,9 @@ begin
   Payable := Revenue - Discount;
   Profit := Payable - Cost;
   txt := 'صورت‌حساب استودیو عکاسی سبز' + sLineBreak;
+  if FShopName <> '' then
+    txt := txt + 'چاپخانه: ' + FShopName +
+      IfThen(FShopPhone <> '', ' — تلفن: ' + FShopPhone, '') + sLineBreak;
   txt := txt + 'شماره: ' + DocNo + sLineBreak;
   txt := txt + 'تاریخ: ' + JalaliToday + '   ساعت: ' +
     FormatDateTime('hh:nn', Now) + sLineBreak;
@@ -2612,7 +2618,7 @@ end;
 function TForm1.InvoiceHTML(const DocNo: string): string;
 var
   line: TCartLine;
-  rows, dummy, cust: string;
+  rows, dummy, cust, shop: string;
   rev, cost, prof, disc, pay: Int64;
   n: Integer;
 begin
@@ -2636,6 +2642,13 @@ begin
   if FCustomerMobile <> '' then
     cust := cust + '<div><span>موبایل:</span> ' + HtmlEsc(FCustomerMobile) +
       '</div>';
+  shop := '';
+  if FShopName <> '' then
+    shop := '<div class="shop"><span>چاپخانه:</span> <b>' +
+      HtmlEsc(FShopName) + '</b>' +
+      IfThen(FShopPhone <> '', ' &nbsp;<span>تلفن:</span> ' +
+      HtmlEsc(FShopPhone), '') +
+      IfThen(FShopAddress <> '', '<br>' + HtmlEsc(FShopAddress), '') + '</div>';
   Result :=
     '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">' +
     '<title>فاکتور ' + DocNo + '</title><style>' +
@@ -2646,6 +2659,10 @@ begin
     'border-bottom:3px solid #1f8a70;padding-bottom:2mm;margin-bottom:2mm;}' +
     '.hd h1{font-size:17px;margin:0;color:#1b2430;}' +
     '.hd .sub{font-size:9px;color:#1f8a70;}' +
+    '.shop{margin-top:1mm;font-size:10px;color:#1b2430;background:#eef7f3;' +
+    'border:1px solid #cfe8df;border-radius:1mm;padding:1mm 2mm;' +
+    'display:inline-block;}' +
+    '.shop span{color:#1f8a70;}' +
     '.meta{font-size:10px;color:#444;text-align:left;line-height:1.6;}' +
     '.cust{display:flex;gap:6mm;font-size:10px;margin:1mm 0 2mm;}' +
     '.cust span,.meta span{color:#888;}' +
@@ -2665,7 +2682,7 @@ begin
     '.foot{margin-top:6mm;font-size:9px;color:#777;text-align:center;}' +
     '</style></head><body onload="window.print()">' +
     '<div class="hd"><div><h1>استودیو عکاسی سبز</h1>' +
-    '<div class="sub">صورت‌حساب فروش</div></div>' +
+    '<div class="sub">صورت‌حساب فروش</div>' + shop + '</div>' +
     '<div class="meta"><span>شماره:</span> ' + DocNo +
     '<br><span>تاریخ:</span> ' + ToPersianDigits(JalaliToday) +
     ' &nbsp; <span>ساعت:</span> ' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
@@ -2904,12 +2921,18 @@ var
   cs: string;
 begin
   FExcelPath := PriceXlsPath;
+  FShopName := '';
+  FShopPhone := '';
+  FShopAddress := '';
   if not FileExists(AppDir + SettingsFile) then
     Exit;
   try
     ini := TMemIniFile.Create(AppDir + SettingsFile, TEncoding.UTF8);
     try
       FExcelPath := ini.ReadString('Excel', 'Path', PriceXlsPath);
+      FShopName := Trim(ini.ReadString('PrintShop', 'Name', ''));
+      FShopPhone := Trim(ini.ReadString('PrintShop', 'Phone', ''));
+      FShopAddress := Trim(ini.ReadString('PrintShop', 'Address', ''));
       cs := Trim(ini.ReadString('Database', 'ConnectionString', ''));
       if cs <> '' then
         FData.ConnStr := cs;
@@ -2929,6 +2952,12 @@ begin
     ini := TMemIniFile.Create(AppDir + SettingsFile, TEncoding.UTF8);
     try
       ini.WriteString('Excel', 'Path', FExcelPath);
+      if FShopName <> '' then
+        ini.WriteString('PrintShop', 'Name', FShopName);
+      if FShopPhone <> '' then
+        ini.WriteString('PrintShop', 'Phone', FShopPhone);
+      if FShopAddress <> '' then
+        ini.WriteString('PrintShop', 'Address', FShopAddress);
       ini.UpdateFile;
     finally
       ini.Free;
