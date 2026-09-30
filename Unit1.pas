@@ -48,6 +48,8 @@ type
     FShopName: string;
     FShopPhone: string;
     FShopAddress: string;
+    FChkShop: TCheckBox;
+    FEdInvDate: TEdit;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -209,6 +211,9 @@ type
     procedure BtnGoPeopleClick(Sender: TObject);
     procedure EdSearchKeyPress(Sender: TObject; var Key: Char);
     procedure EdCustomerChange(Sender: TObject);
+    procedure BtnInvTodayClick(Sender: TObject);
+    procedure EdInvDateEnter(Sender: TObject);
+    function InvoiceDateText: string;
   public
   end;
 
@@ -1188,7 +1193,7 @@ begin
 
   cartTool := MakePanel(cartCard, C_CARD);
   cartTool.Align := alTop;
-  cartTool.Height := 86;
+  cartTool.Height := 126;
 
   with MakeButton(cartTool, 'حذف انتخاب', C_DANGER, clWhite,
     BtnRemoveClick) do
@@ -1261,6 +1266,31 @@ begin
     Height := 32;
   end;
 
+  with MakeLabel(cartTool, 'تاریخ فاکتور:', C_MUTED, 9, True) do
+  begin
+    Left := 8;
+    Top := 92;
+    AutoSize := True;
+  end;
+  FEdInvDate := MakeEdit(cartTool);
+  FEdInvDate.Left := 96;
+  FEdInvDate.Top := 87;
+  FEdInvDate.Width := 118;
+  FEdInvDate.Height := 30;
+  FEdInvDate.Text := ToPersianDigits(JalaliToday);
+  FEdInvDate.TextHint := 'مثلاً ۱۴۰۵/۰۷/۰۸';
+  FEdInvDate.Hint := 'تاریخ روز فاکتور؛ قابل ویرایش است و روی هر دو نوع فاکتور می‌آید';
+  FEdInvDate.ShowHint := True;
+  FEdInvDate.OnEnter := EdInvDateEnter;
+  FEdInvDate.OnClick := EdInvDateEnter;
+  with MakeButton(cartTool, 'امروز', C_BORDER, C_TEXT, BtnInvTodayClick) do
+  begin
+    Left := 222;
+    Top := 88;
+    Width := 74;
+    Height := 30;
+  end;
+
   totals := MakePanel(cartCard, C_ALT);
   totals.Align := alBottom;
   totals.Height := 176;
@@ -1302,6 +1332,19 @@ begin
   FEdDisc.TextHint := 'مثلاً 50000 یا 10%';
   FEdDisc.Hint := 'مبلغ تخفیف به تومان، یا درصد با علامت ٪ (مثلاً 10%)';
   FEdDisc.ShowHint := True;
+
+  FChkShop := TCheckBox.Create(totals);
+  FChkShop.Parent := totals;
+  FChkShop.Left := 366;
+  FChkShop.Top := 72;
+  FChkShop.Width := 150;
+  FChkShop.Height := 22;
+  FChkShop.Caption := 'فاکتور با نام چاپخانه';
+  FChkShop.Font.Name := 'Tahoma';
+  FChkShop.Font.Size := 9;
+  FChkShop.BiDiMode := bdRightToLeft;
+  FChkShop.Hint := 'اگر تیک بخورد، فاکتور به نام چاپخانه (از SabzPrice.ini) صادر می‌شود';
+  FChkShop.ShowHint := True;
 
   with MakeLabel(totals, 'سود خالص:', C_SUCCESS, 11, True) do
   begin
@@ -2567,11 +2610,46 @@ begin
     Result := Subtotal;
 end;
 
+procedure TForm1.BtnInvTodayClick(Sender: TObject);
+begin
+  if FEdInvDate <> nil then
+    FEdInvDate.Text := ToPersianDigits(JalaliToday);
+  SetStatus('تاریخ فاکتور روی امروز تنظیم شد.');
+end;
+
+procedure TForm1.EdInvDateEnter(Sender: TObject);
+begin
+  if FEdInvDate <> nil then
+    FEdInvDate.SelectAll;
+end;
+
+function TForm1.InvoiceDateText: string;
+var
+  s: string;
+begin
+  s := '';
+  if FEdInvDate <> nil then
+    s := Trim(FEdInvDate.Text);
+  if s = '' then
+    s := JalaliToday;
+  s := StringReplace(s, #$202A, '', [rfReplaceAll]);
+  s := StringReplace(s, #$202C, '', [rfReplaceAll]);
+  s := StringReplace(s, #$200E, '', [rfReplaceAll]);
+  s := StringReplace(s, #$200F, '', [rfReplaceAll]);
+  s := ToLatinDigits(s);
+  s := StringReplace(s, '-', '/', [rfReplaceAll]);
+  s := StringReplace(s, '.', '/', [rfReplaceAll]);
+  s := StringReplace(s, ' ', '', [rfReplaceAll]);
+  s := StringReplace(s, '،', '', [rfReplaceAll]);
+  Result := ToPersianDigits(s);
+end;
+
 function TForm1.InvoiceText(out DocNo: string; out Revenue, Cost, Profit,
   Discount, Payable: Int64): string;
 var
   line: TCartLine;
   txt: string;
+  shopMode: Boolean;
 begin
   DocNo := 'SABZ-' + FormatDateTime('yymmdd-hhnnss', Now);
   Revenue := 0;
@@ -2584,12 +2662,22 @@ begin
   Discount := DiscountValue(Revenue);
   Payable := Revenue - Discount;
   Profit := Payable - Cost;
-  txt := 'صورت‌حساب استودیو عکاسی سبز' + sLineBreak;
-  if FShopName <> '' then
-    txt := txt + 'چاپخانه: ' + FShopName +
-      IfThen(FShopPhone <> '', ' — تلفن: ' + FShopPhone, '') + sLineBreak;
+  shopMode := (FChkShop <> nil) and FChkShop.Checked and (FShopName <> '');
+  if shopMode then
+    txt := 'صورت‌حساب ' + FShopName
+  else
+    txt := 'صورت‌حساب استودیو عکاسی سبز';
+  txt := txt + sLineBreak;
+  if shopMode then
+  begin
+    txt := txt + 'صادرشده برای استودیو عکاسی سبز' + sLineBreak;
+    if FShopPhone <> '' then
+      txt := txt + 'تلفن چاپخانه: ' + FShopPhone + sLineBreak;
+    if FShopAddress <> '' then
+      txt := txt + FShopAddress + sLineBreak;
+  end;
   txt := txt + 'شماره: ' + DocNo + sLineBreak;
-  txt := txt + 'تاریخ: ' + JalaliToday + '   ساعت: ' +
+  txt := txt + 'تاریخ: ' + InvoiceDateText + '   ساعت: ' +
     FormatDateTime('hh:nn', Now) + sLineBreak;
   if Trim(FEdCustomer.Text) <> '' then
     txt := txt + 'مشتری: ' + Trim(FEdCustomer.Text) + sLineBreak;
@@ -2618,9 +2706,10 @@ end;
 function TForm1.InvoiceHTML(const DocNo: string): string;
 var
   line: TCartLine;
-  rows, dummy, cust, shop: string;
+  rows, dummy, cust, shop, title, meta2, foot2, sign1, sign2: string;
   rev, cost, prof, disc, pay: Int64;
   n: Integer;
+  shopMode: Boolean;
 begin
   InvoiceText(dummy, rev, cost, prof, disc, pay);
   rows := '';
@@ -2643,12 +2732,25 @@ begin
     cust := cust + '<div><span>موبایل:</span> ' + HtmlEsc(FCustomerMobile) +
       '</div>';
   shop := '';
-  if FShopName <> '' then
-    shop := '<div class="shop"><span>چاپخانه:</span> <b>' +
-      HtmlEsc(FShopName) + '</b>' +
-      IfThen(FShopPhone <> '', ' &nbsp;<span>تلفن:</span> ' +
-      HtmlEsc(FShopPhone), '') +
-      IfThen(FShopAddress <> '', '<br>' + HtmlEsc(FShopAddress), '') + '</div>';
+  shopMode := (FChkShop <> nil) and FChkShop.Checked and (FShopName <> '');
+  if shopMode then
+  begin
+    title := HtmlEsc(FShopName);
+    meta2 := IfThen(FShopPhone <> '', '<span>تلفن:</span> ' +
+      HtmlEsc(FShopPhone) + '<br>', '') +
+      IfThen(FShopAddress <> '', HtmlEsc(FShopAddress) + '<br>', '');
+    foot2 := 'برای استودیو عکاسی سبز صادر شد';
+    sign1 := 'مهر و امضای چاپخانه';
+    sign2 := 'تأیید استودیو';
+  end
+  else
+  begin
+    title := 'استودیو عکاسی سبز';
+    meta2 := '';
+    foot2 := 'با تشکر از اعتماد شما — استودیو عکاسی سبز';
+    sign1 := 'امضای مشتری';
+    sign2 := 'مهر و امضای استودیو';
+  end;
   Result :=
     '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">' +
     '<title>فاکتور ' + DocNo + '</title><style>' +
@@ -2681,10 +2783,10 @@ begin
     'font-size:10px;color:#666;}' +
     '.foot{margin-top:6mm;font-size:9px;color:#777;text-align:center;}' +
     '</style></head><body onload="window.print()">' +
-    '<div class="hd"><div><h1>استودیو عکاسی سبز</h1>' +
+    '<div class="hd"><div><h1>' + title + '</h1>' +
     '<div class="sub">صورت‌حساب فروش</div>' + shop + '</div>' +
-    '<div class="meta"><span>شماره:</span> ' + DocNo +
-    '<br><span>تاریخ:</span> ' + ToPersianDigits(JalaliToday) +
+    '<div class="meta">' + meta2 + '<span>شماره:</span> ' + DocNo +
+    '<br><span>تاریخ:</span> ' + InvoiceDateText +
     ' &nbsp; <span>ساعت:</span> ' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
     '</div></div>' +
     IfThen(cust <> '', '<div class="cust">' + cust + '</div>', '') +
@@ -2699,8 +2801,8 @@ begin
     '</td></tr></table>' +
     '<div class="words">مبلغ به حروف: ' + NumberToPersianWords(pay) +
     ' تومان</div>' +
-    '<div class="sign"><div>امضای مشتری</div><div>مهر و امضای استودیو</div></div>' +
-    '<div class="foot">با تشکر از اعتماد شما — استودیو عکاسی سبز</div>' +
+    '<div class="sign"><div>' + sign1 + '</div><div>' + sign2 + '</div></div>' +
+    '<div class="foot">' + foot2 + '</div>' +
     '</body></html>';
 end;
 
