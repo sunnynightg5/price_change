@@ -66,6 +66,10 @@ type
     FChkVat: TCheckBox;
     FBtnSvcNew: TPanel;
     FBtnSvcReprint: TPanel;
+    FBtnSvcToggle: TPanel;
+    FCartTool: TPanel;
+    FSvcCtrls: TList<TControl>;
+    FSvcOpen: Boolean;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -191,9 +195,11 @@ type
     procedure BtnSvcDesignClick(Sender: TObject);
     procedure BtnSvcBothNewClick(Sender: TObject);
     procedure BtnSvcBothReprintClick(Sender: TObject);
+    procedure BtnSvcToggleClick(Sender: TObject);
     function VatAmount(Net: Int64): Int64;
     function SizeContext: string;
     procedure UpdateSvcCaptions;
+    function ShortTitleOf(ALine: TCartLine): string;
     procedure AddService(Kind: Integer);
     function ServiceSize: string;
     function EstimatedCostOf(const Code: string): Int64;
@@ -608,6 +614,7 @@ end;
 procedure TForm1.FormDestroy(Sender: TObject);
 begin
   FPeopleTimer.Enabled := False;
+  FSvcCtrls.Free;
   FPeopleDist.Free;
   FPeopleView.Free;
   FAllPeople.Free;
@@ -1142,6 +1149,9 @@ end;
 procedure TForm1.BuildCalcPage;
 var
   page, outer, catCard, catTool, cartCard, cartTool, totals, custRow: TPanel;
+  svcBtn: TPanel;
+  svcLbl: TLabel;
+  i: Integer;
 begin
   page := MakePanel(Self, C_BG);
   page.Parent := Self;
@@ -1221,8 +1231,9 @@ begin
   end;
 
   cartTool := MakePanel(cartCard, C_CARD);
+  FCartTool := cartTool;
   cartTool.Align := alTop;
-  cartTool.Height := 166;
+  cartTool.Height := 86;
 
   with MakeButton(cartTool, 'حذف انتخاب', C_DANGER, clWhite,
     BtnRemoveClick) do
@@ -1264,47 +1275,82 @@ begin
     Height := 32;
   end;
 
-  with MakeButton(cartTool, 'شاسی و لمینت با هم', C_ACCENT, clWhite,
-    BtnSvcBothClick) do
-  begin
-    Left := 8;
-    Top := 48;
-    Width := 148;
-    Height := 32;
-  end;
-  with MakeButton(cartTool, 'شاسی جدا', C_GOLD, C_TEXT, BtnSvcFrameClick) do
-  begin
-    Left := 162;
-    Top := 48;
-    Width := 88;
-    Height := 32;
-  end;
-  with MakeButton(cartTool, 'لمینت جدا', C_GOLD, C_TEXT, BtnSvcLamClick) do
-  begin
-    Left := 256;
-    Top := 48;
-    Width := 88;
-    Height := 32;
-  end;
+  FBtnSvcToggle := MakeButton(cartTool, 'سرویس‌ها ▾', C_ACCENT, clWhite,
+    BtnSvcToggleClick);
+  FBtnSvcToggle.Left := 8;
+  FBtnSvcToggle.Top := 48;
+  FBtnSvcToggle.Width := 140;
+  FBtnSvcToggle.Height := 32;
   with MakeButton(cartTool, 'باز کردن فاکتورها', C_NAVY, clWhite,
     BtnOpenFacturesClick) do
   begin
-    Left := 350;
+    Left := 154;
     Top := 48;
     Width := 140;
     Height := 32;
   end;
 
-  with MakeLabel(cartTool, 'تاریخ فاکتور:', C_MUTED, 9, True) do
-  begin
-    Left := 8;
-    Top := 92;
-    AutoSize := True;
-  end;
+  { ---------- سرویس‌ها (بازشو) ---------- }
+  FSvcCtrls := TList<TControl>.Create;
+
+  FBtnSvcNew := MakeButton(cartTool, 'شاسی+لمینت+عکس جدید', C_GOLD, C_TEXT,
+    BtnSvcBothNewClick);
+  FBtnSvcNew.Left := 8;
+  FBtnSvcNew.Top := 88;
+  FBtnSvcNew.Width := 240;
+  FBtnSvcNew.Height := 30;
+  FSvcCtrls.Add(FBtnSvcNew);
+  FBtnSvcReprint := MakeButton(cartTool, 'شاسی+لمینت+چاپ مجدد', C_GOLD,
+    C_TEXT, BtnSvcBothReprintClick);
+  FBtnSvcReprint.Left := 254;
+  FBtnSvcReprint.Top := 88;
+  FBtnSvcReprint.Width := 240;
+  FBtnSvcReprint.Height := 30;
+  FSvcCtrls.Add(FBtnSvcReprint);
+
+  svcBtn := MakeButton(cartTool, 'شاسی+لمینت تنها', C_ACCENT, clWhite,
+    BtnSvcBothClick);
+  svcBtn.Left := 8;
+  svcBtn.Top := 124;
+  svcBtn.Width := 104;
+  svcBtn.Height := 30;
+  FSvcCtrls.Add(svcBtn);
+  svcBtn := MakeButton(cartTool, 'شاسی جدا', C_GOLD, C_TEXT, BtnSvcFrameClick);
+  svcBtn.Left := 118;
+  svcBtn.Top := 124;
+  svcBtn.Width := 90;
+  svcBtn.Height := 30;
+  FSvcCtrls.Add(svcBtn);
+  svcBtn := MakeButton(cartTool, 'لمینت جدا', C_GOLD, C_TEXT, BtnSvcLamClick);
+  svcBtn.Left := 214;
+  svcBtn.Top := 124;
+  svcBtn.Width := 90;
+  svcBtn.Height := 30;
+  FSvcCtrls.Add(svcBtn);
+  svcBtn := MakeButton(cartTool, 'ترمیم عکس', C_ACCENT_L, C_NAVY,
+    BtnSvcFixClick);
+  svcBtn.Left := 310;
+  svcBtn.Top := 124;
+  svcBtn.Width := 96;
+  svcBtn.Height := 30;
+  FSvcCtrls.Add(svcBtn);
+  svcBtn := MakeButton(cartTool, 'طراحی عکس', C_ACCENT_L, C_NAVY,
+    BtnSvcDesignClick);
+  svcBtn.Left := 412;
+  svcBtn.Top := 124;
+  svcBtn.Width := 90;
+  svcBtn.Height := 30;
+  FSvcCtrls.Add(svcBtn);
+
+  svcLbl := MakeLabel(cartTool, 'تاریخ فاکتور:', C_MUTED, 9, True);
+  svcLbl.Left := 8;
+  svcLbl.Top := 168;
+  svcLbl.AutoSize := True;
+  FSvcCtrls.Add(svcLbl);
   FEdInvDate := MakeEdit(cartTool);
   FEdInvDate.Left := 96;
-  FEdInvDate.Top := 87;
-  FEdInvDate.Width := 118;
+  FEdInvDate.Top := 163;
+  FEdInvDate.Width := 110;
   FEdInvDate.Height := 30;
   FEdInvDate.Text := ToPersianDigits(JalaliToday);
   FEdInvDate.TextHint := 'مثلاً ۱۴۰۵/۰۷/۰۸';
@@ -1312,39 +1358,43 @@ begin
   FEdInvDate.ShowHint := True;
   FEdInvDate.OnEnter := EdInvDateEnter;
   FEdInvDate.OnClick := EdInvDateEnter;
-  with MakeButton(cartTool, 'امروز', C_BORDER, C_TEXT, BtnInvTodayClick) do
-  begin
-    Left := 222;
-    Top := 88;
-    Width := 74;
-    Height := 30;
-  end;
-  with MakeButton(cartTool, 'ترمیم عکس', C_ACCENT_L, C_NAVY, BtnSvcFixClick) do
-  begin
-    Left := 304;
-    Top := 88;
-    Width := 104;
-    Height := 30;
-  end;
-  with MakeButton(cartTool, 'طراحی عکس', C_ACCENT_L, C_NAVY, BtnSvcDesignClick) do
-  begin
-    Left := 414;
-    Top := 88;
-    Width := 100;
-    Height := 30;
-  end;
-  FBtnSvcNew := MakeButton(cartTool, 'شاسی و لمینت + عکس جدید', C_GOLD, C_TEXT,
-    BtnSvcBothNewClick);
-  FBtnSvcNew.Left := 8;
-  FBtnSvcNew.Top := 128;
-  FBtnSvcNew.Width := 240;
-  FBtnSvcNew.Height := 30;
-  FBtnSvcReprint := MakeButton(cartTool, 'شاسی و لمینت + چاپ مجدد', C_GOLD,
-    C_TEXT, BtnSvcBothReprintClick);
-  FBtnSvcReprint.Left := 254;
-  FBtnSvcReprint.Top := 128;
-  FBtnSvcReprint.Width := 240;
-  FBtnSvcReprint.Height := 30;
+  FSvcCtrls.Add(FEdInvDate);
+  svcBtn := MakeButton(cartTool, 'امروز', C_BORDER, C_TEXT, BtnInvTodayClick);
+  svcBtn.Left := 212;
+  svcBtn.Top := 164;
+  svcBtn.Width := 66;
+  svcBtn.Height := 28;
+  FSvcCtrls.Add(svcBtn);
+
+  FChkVat := TCheckBox.Create(cartTool);
+  FChkVat.Parent := cartTool;
+  FChkVat.Left := 8;
+  FChkVat.Top := 204;
+  FChkVat.Width := 200;
+  FChkVat.Height := 22;
+  FChkVat.Caption := 'مالیات بر ارزش افزوده ۱۰٪';
+  FChkVat.Font.Name := 'Tahoma';
+  FChkVat.Font.Size := 9;
+  FChkVat.BiDiMode := bdRightToLeft;
+  FChkVat.Hint := 'اگر تیک بخورد، ۱۰٪ مالیات به مبلغ فاکتور اضافه می‌شود';
+  FChkVat.ShowHint := True;
+  FSvcCtrls.Add(FChkVat);
+  FChkShop := TCheckBox.Create(cartTool);
+  FChkShop.Parent := cartTool;
+  FChkShop.Left := 216;
+  FChkShop.Top := 204;
+  FChkShop.Width := 200;
+  FChkShop.Height := 22;
+  FChkShop.Caption := 'فاکتور با نام چاپخانه';
+  FChkShop.Font.Name := 'Tahoma';
+  FChkShop.Font.Size := 9;
+  FChkShop.BiDiMode := bdRightToLeft;
+  FChkShop.Hint := 'اگر تیک بخورد، فاکتور به نام چاپخانه (از SabzPrice.ini) صادر می‌شود';
+  FChkShop.ShowHint := True;
+  FSvcCtrls.Add(FChkShop);
+
+  for i := 0 to FSvcCtrls.Count - 1 do
+    FSvcCtrls[i].Visible := False;
 
   totals := MakePanel(cartCard, C_ALT);
   totals.Align := alBottom;
@@ -1387,32 +1437,6 @@ begin
   FEdDisc.TextHint := 'مثلاً 50000 یا 10%';
   FEdDisc.Hint := 'مبلغ تخفیف به تومان، یا درصد با علامت ٪ (مثلاً 10%)';
   FEdDisc.ShowHint := True;
-
-  FChkShop := TCheckBox.Create(totals);
-  FChkShop.Parent := totals;
-  FChkShop.Left := 366;
-  FChkShop.Top := 72;
-  FChkShop.Width := 150;
-  FChkShop.Height := 22;
-  FChkShop.Caption := 'فاکتور با نام چاپخانه';
-  FChkShop.Font.Name := 'Tahoma';
-  FChkShop.Font.Size := 9;
-  FChkShop.BiDiMode := bdRightToLeft;
-  FChkShop.Hint := 'اگر تیک بخورد، فاکتور به نام چاپخانه (از SabzPrice.ini) صادر می‌شود';
-  FChkShop.ShowHint := True;
-
-  FChkVat := TCheckBox.Create(totals);
-  FChkVat.Parent := totals;
-  FChkVat.Left := 366;
-  FChkVat.Top := 40;
-  FChkVat.Width := 160;
-  FChkVat.Height := 22;
-  FChkVat.Caption := 'مالیات بر ارزش افزوده ۱۰٪';
-  FChkVat.Font.Name := 'Tahoma';
-  FChkVat.Font.Size := 9;
-  FChkVat.BiDiMode := bdRightToLeft;
-  FChkVat.Hint := 'اگر تیک بخورد، ۱۰٪ مالیات به مبلغ فاکتور اضافه می‌شود';
-  FChkVat.ShowHint := True;
 
   with MakeLabel(totals, 'سود خالص:', C_SUCCESS, 11, True) do
   begin
@@ -2519,7 +2543,7 @@ begin
     for i := 0 to FCart.Count - 1 do
     begin
       line := FCart[i];
-      FGridCart.Cells[0, i + 1] := line.Title;
+      FGridCart.Cells[0, i + 1] := ShortTitleOf(line);
       FGridCart.Cells[1, i + 1] := IntToStr(line.Qty);
       FGridCart.Cells[2, i + 1] := FormatMoney(line.UnitPrice);
       FGridCart.Cells[3, i + 1] := FormatMoney(line.Cost);
@@ -2811,7 +2835,7 @@ begin
   txt := txt + '----------------------------------------' + sLineBreak;
   for line in FCart do
     txt := txt + Format('%s ×%d = %s',
-      [line.Title, line.Qty, FormatToman(line.Total)]) + sLineBreak;
+      [ShortTitleOf(line), line.Qty, FormatToman(line.Total)]) + sLineBreak;
   txt := txt + '----------------------------------------' + sLineBreak;
   txt := txt + 'جمع فروش: ' + FormatToman(Revenue) + sLineBreak;
   if Discount > 0 then
@@ -2851,7 +2875,7 @@ begin
     rows := rows + Format
       ('<tr><td class="c">%s</td><td>%s</td><td class="c">%s</td>' +
       '<td class="num">%s</td><td class="num strong">%s</td></tr>' + sLineBreak,
-      [ToPersianDigits(IntToStr(n)), HtmlEsc(line.Title),
+      [ToPersianDigits(IntToStr(n)), HtmlEsc(ShortTitleOf(line)),
       ToPersianDigits(IntToStr(line.Qty)), FormatMoney(line.UnitPrice),
       FormatMoney(line.Total)]);
   end;
@@ -3119,6 +3143,86 @@ end;
 procedure TForm1.BtnSvcBothReprintClick(Sender: TObject);
 begin
   AddService(7);
+end;
+
+procedure TForm1.BtnSvcToggleClick(Sender: TObject);
+var
+  i: Integer;
+begin
+  FSvcOpen := not FSvcOpen;
+  if FSvcCtrls <> nil then
+    for i := 0 to FSvcCtrls.Count - 1 do
+      FSvcCtrls[i].Visible := FSvcOpen;
+  if FBtnSvcToggle <> nil then
+  begin
+    if FSvcOpen then
+      FBtnSvcToggle.Caption := 'سرویس‌ها ▴'
+    else
+      FBtnSvcToggle.Caption := 'سرویس‌ها ▾';
+  end;
+  if FCartTool <> nil then
+  begin
+    if FSvcOpen then
+      FCartTool.Height := 234
+    else
+      FCartTool.Height := 86;
+  end;
+  if FSvcOpen then
+    UpdateSvcCaptions;
+end;
+
+function TForm1.ShortTitleOf(ALine: TCartLine): string;
+var
+  sz, disp: string;
+  c: string;
+begin
+  c := Trim(ALine.Code);
+  sz := SizePartOf(c);
+  if sz = '' then
+    sz := c;
+  disp := #$202A + StringReplace(sz, '*', '×', [rfReplaceAll]) + #$202C;
+  if SameText(c, 'tarmim') then
+    Exit('ترمیم و بازسازی عکس');
+  if SameText(c, 'tarahi') then
+    Exit('طراحی عکس');
+  if SameText(c, 'cd') then
+    Exit('سی‌دی');
+  if SameText(c, 'cd_just') then
+    Exit('سی‌دی فقط');
+  if SameText(c, 'nose') then
+    Exit('اصلاح بینی');
+  if SameText(c, 'new') then
+    Exit('عکس جدید (ورودی)');
+  if SameText(c, '24') then
+    Exit('بسته ۲۴ عددی');
+  if StartsText('f_', c) then
+    Exit('فایل');
+  if Pos('+', c) > 0 then
+  begin
+    if Pos('n', c) > 0 then
+      Exit('شاسی+لمینت+عکس جدید ' + disp)
+    else
+      Exit('شاسی+لمینت+چاپ مجدد ' + disp);
+  end;
+  case ClassifyCode(c) of
+    pcFrame:
+      Result := 'شاسی+لمینت ' + disp;
+    pcArtNew:
+      Result := 'عکس جدید ' + disp;
+    pcArtReprint:
+      Result := 'چاپ مجدد ' + disp;
+    pcFace:
+      Result := 'روتوش چهره ' + disp;
+    pcItalianAlbum:
+      Result := 'آلبوم ایتالیایی ' + disp;
+    pcCeremony:
+      Result := 'عکس مراسم ' + disp;
+  else
+    if ALine.Title <> '' then
+      Result := ALine.Title
+    else
+      Result := disp;
+  end;
 end;
 
 function TForm1.ServiceSize: string;
