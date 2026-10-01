@@ -64,6 +64,8 @@ type
     FStudioRegister: string;
     FPayBank: string;
     FChkVat: TCheckBox;
+    FBtnSvcNew: TPanel;
+    FBtnSvcReprint: TPanel;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -190,6 +192,8 @@ type
     procedure BtnSvcBothNewClick(Sender: TObject);
     procedure BtnSvcBothReprintClick(Sender: TObject);
     function VatAmount(Net: Int64): Int64;
+    function SizeContext: string;
+    procedure UpdateSvcCaptions;
     procedure AddService(Kind: Integer);
     function ServiceSize: string;
     function EstimatedCostOf(const Code: string): Int64;
@@ -1329,22 +1333,18 @@ begin
     Width := 100;
     Height := 30;
   end;
-  with MakeButton(cartTool, 'شاسی و لمینت + عکس جدید', C_GOLD, C_TEXT,
-    BtnSvcBothNewClick) do
-  begin
-    Left := 8;
-    Top := 128;
-    Width := 240;
-    Height := 30;
-  end;
-  with MakeButton(cartTool, 'شاسی و لمینت + چاپ مجدد', C_GOLD, C_TEXT,
-    BtnSvcBothReprintClick) do
-  begin
-    Left := 254;
-    Top := 128;
-    Width := 240;
-    Height := 30;
-  end;
+  FBtnSvcNew := MakeButton(cartTool, 'شاسی و لمینت + عکس جدید', C_GOLD, C_TEXT,
+    BtnSvcBothNewClick);
+  FBtnSvcNew.Left := 8;
+  FBtnSvcNew.Top := 128;
+  FBtnSvcNew.Width := 240;
+  FBtnSvcNew.Height := 30;
+  FBtnSvcReprint := MakeButton(cartTool, 'شاسی و لمینت + چاپ مجدد', C_GOLD,
+    C_TEXT, BtnSvcBothReprintClick);
+  FBtnSvcReprint.Left := 254;
+  FBtnSvcReprint.Top := 128;
+  FBtnSvcReprint.Width := 240;
+  FBtnSvcReprint.Height := 30;
 
   totals := MakePanel(cartCard, C_ALT);
   totals.Align := alBottom;
@@ -2211,6 +2211,7 @@ begin
   finally
     FUpdating := False;
   end;
+  UpdateSvcCaptions;
 end;
 
 procedure TForm1.EdPriceSearchChange(Sender: TObject);
@@ -2439,6 +2440,7 @@ end;
 procedure TForm1.EdCatSearchChange(Sender: TObject);
 begin
   FillCatalog;
+  UpdateSvcCaptions;
 end;
 
 procedure TForm1.GridCatDblClick(Sender: TObject);
@@ -3121,6 +3123,23 @@ end;
 
 function TForm1.ServiceSize: string;
 var
+  s: string;
+begin
+  Result := SizeContext;
+  if Result <> '' then
+    Exit;
+  s := StringReplace(ToLatinDigits(Trim(InputBox('سایز سرویس',
+    'سایز را وارد کنید (مثال: 10*15):', '10*15'))), ' ', '', [rfReplaceAll]);
+  if Pos('*', s) = 0 then
+  begin
+    SetStatus('سایز نامعتبر است.');
+    Exit('');
+  end;
+  Result := s;
+end;
+
+function TForm1.SizeContext: string;
+var
   it: TPriceItem;
   s: string;
 begin
@@ -3139,14 +3158,35 @@ begin
     [rfReplaceAll]);
   if Pos('*', s) > 0 then
     Exit(s);
-  s := StringReplace(ToLatinDigits(Trim(InputBox('سایز سرویس',
-    'سایز را وارد کنید (مثال: 10*15):', '10*15'))), ' ', '', [rfReplaceAll]);
-  if Pos('*', s) = 0 then
+end;
+
+procedure TForm1.UpdateSvcCaptions;
+var
+  sz, disp: string;
+  p1, p2: Int64;
+begin
+  if (FBtnSvcNew = nil) or (FBtnSvcReprint = nil) then
+    Exit;
+  sz := SizeContext;
+  if sz = '' then
   begin
-    SetStatus('سایز نامعتبر است.');
-    Exit('');
+    FBtnSvcNew.Caption := 'شاسی+لمینت+عکس جدید';
+    FBtnSvcReprint.Caption := 'شاسی+لمینت+چاپ مجدد';
+    Exit;
   end;
-  Result := s;
+  FBtnSvcNew.Caption := 'شاسی+لمینت+عکس جدید';
+  FBtnSvcReprint.Caption := 'شاسی+لمینت+چاپ مجدد';
+  p1 := PriceOf(sz + 'n');
+  if p1 < 0 then
+    p1 := PriceOf('new');
+  p2 := PriceOf(sz + '_');
+  if (p1 >= 0) and (p2 >= 0) then
+    FBtnSvcNew.Caption := 'شاسی+لمینت+جدید = ' +
+      ToPersianDigits(FormatMoney(p1 + p2));
+  p1 := PriceOf(sz);
+  if (p1 >= 0) and (p2 >= 0) then
+    FBtnSvcReprint.Caption := 'شاسی+لمینت+مجدد = ' +
+      ToPersianDigits(FormatMoney(p1 + p2));
 end;
 
 procedure TForm1.AddService(Kind: Integer);
@@ -3216,8 +3256,14 @@ begin
       begin
         { شاسی و لمینت + عکس جدید (فقط چاپ) }
         c1 := sz + 'n';
-        c2 := sz + '_';
         p1 := PriceOf(c1);
+        if p1 < 0 then
+        begin
+          { سایزهایی که کد n ندارند: قیمت «عکس جدید» از کد new }
+          c1 := 'new';
+          p1 := PriceOf(c1);
+        end;
+        c2 := sz + '_';
         p2 := PriceOf(c2);
         if (p1 >= 0) and (p2 >= 0) then
           price := p1 + p2
