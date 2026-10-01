@@ -19,6 +19,7 @@ uses
   System.SysUtils, System.Variants, System.Classes, System.Types,
   System.Win.ComObj, System.IniFiles, System.Generics.Defaults,
   System.Generics.Collections, System.StrUtils, System.Math, System.UITypes,
+  System.NetEncoding,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
   Vcl.ExtCtrls, Vcl.Grids, Vcl.Clipbrd,
   Data.DB, Data.Win.ADODB,
@@ -50,6 +51,13 @@ type
     FShopAddress: string;
     FChkShop: TCheckBox;
     FEdInvDate: TEdit;
+    FLogoSrc: string;
+    FLogoUri: string;
+    FLogoLoaded: Boolean;
+    FStudioName: string;
+    FStudioPhone: string;
+    FStudioAddress: string;
+    FStudioInstagram: string;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -213,6 +221,7 @@ type
     procedure EdCustomerChange(Sender: TObject);
     procedure BtnInvTodayClick(Sender: TObject);
     procedure EdInvDateEnter(Sender: TObject);
+    function LogoDataUri: string;
     function InvoiceDateText: string;
   public
   end;
@@ -2623,6 +2632,50 @@ begin
     FEdInvDate.SelectAll;
 end;
 
+function TForm1.LogoDataUri: string;
+var
+  path, ext, mime: string;
+  fs: TFileStream;
+  bytes: TBytes;
+begin
+  if FLogoLoaded then
+    Exit(FLogoUri);
+  FLogoLoaded := True;
+  FLogoUri := '';
+  path := FLogoSrc;
+  if path = '' then
+    path := AppDir + 'logo.png';
+  if not FileExists(path) then
+    Exit;
+  ext := LowerCase(ExtractFileExt(path));
+  if ext = '.jpg' then
+    mime := 'image/jpeg'
+  else if ext = '.jpeg' then
+    mime := 'image/jpeg'
+  else if ext = '.gif' then
+    mime := 'image/gif'
+  else if ext = '.bmp' then
+    mime := 'image/bmp'
+  else
+    mime := 'image/png';
+  try
+    fs := TFileStream.Create(path, fmOpenRead or fmShareDenyWrite);
+    try
+      SetLength(bytes, fs.Size);
+      if fs.Size > 0 then
+        fs.ReadBuffer(bytes[0], fs.Size);
+    finally
+      fs.Free;
+    end;
+    if Length(bytes) > 0 then
+      FLogoUri := 'data:' + mime + ';base64,' +
+        TNetEncoding.Base64.EncodeBytesToString(bytes);
+  except
+    FLogoUri := '';
+  end;
+  Result := FLogoUri;
+end;
+
 function TForm1.InvoiceDateText: string;
 var
   s: string;
@@ -2706,10 +2759,11 @@ end;
 function TForm1.InvoiceHTML(const DocNo: string): string;
 var
   line: TCartLine;
-  rows, dummy, cust, shop, title, meta2, foot2, sign1, sign2: string;
+  rows, dummy, cust, logo, u: string;
   rev, cost, prof, disc, pay: Int64;
   n: Integer;
   shopMode: Boolean;
+  brandName, tagLine, metaLines, footLine, sign1, sign2, contact: string;
 begin
   InvoiceText(dummy, rev, cost, prof, disc, pay);
   rows := '';
@@ -2719,35 +2773,49 @@ begin
     Inc(n);
     rows := rows + Format
       ('<tr><td class="c">%s</td><td>%s</td><td class="c">%s</td>' +
-      '<td>%s</td><td><b>%s</b></td></tr>' + sLineBreak,
+      '<td class="num">%s</td><td class="num strong">%s</td></tr>' + sLineBreak,
       [ToPersianDigits(IntToStr(n)), HtmlEsc(line.Title),
       ToPersianDigits(IntToStr(line.Qty)), FormatMoney(line.UnitPrice),
       FormatMoney(line.Total)]);
   end;
   cust := '';
   if Trim(FEdCustomer.Text) <> '' then
-    cust := '<div><span>مشتری:</span> ' + HtmlEsc(Trim(FEdCustomer.Text)) +
-      '</div>';
+    cust := '<div><span>مشتری</span><b>' + HtmlEsc(Trim(FEdCustomer.Text)) +
+      '</b></div>';
   if FCustomerMobile <> '' then
-    cust := cust + '<div><span>موبایل:</span> ' + HtmlEsc(FCustomerMobile) +
-      '</div>';
-  shop := '';
+    cust := cust + '<div><span>موبایل</span><b>' + HtmlEsc(FCustomerMobile) +
+      '</b></div>';
   shopMode := (FChkShop <> nil) and FChkShop.Checked and (FShopName <> '');
+  logo := '';
   if shopMode then
   begin
-    title := HtmlEsc(FShopName);
-    meta2 := IfThen(FShopPhone <> '', '<span>تلفن:</span> ' +
-      HtmlEsc(FShopPhone) + '<br>', '') +
-      IfThen(FShopAddress <> '', HtmlEsc(FShopAddress) + '<br>', '');
-    foot2 := 'برای استودیو عکاسی سبز صادر شد';
+    brandName := HtmlEsc(FShopName);
+    tagLine := 'صورت‌حساب فروش';
+    metaLines :=
+      IfThen(FShopPhone <> '', '<div><span>تلفن</span><b>' +
+      HtmlEsc(FShopPhone) + '</b></div>', '') +
+      IfThen(FShopAddress <> '', '<div><span>نشانی</span><b>' +
+      HtmlEsc(FShopAddress) + '</b></div>', '');
+    footLine := 'این فاکتور به نمایندگی از ' + HtmlEsc(FStudioName) +
+      ' صادر شده است.';
     sign1 := 'مهر و امضای چاپخانه';
     sign2 := 'تأیید استودیو';
   end
   else
   begin
-    title := 'استودیو عکاسی سبز';
-    meta2 := '';
-    foot2 := 'با تشکر از اعتماد شما — استودیو عکاسی سبز';
+    brandName := HtmlEsc(FStudioName);
+    tagLine := 'صورت‌حساب فروش';
+    u := LogoDataUri;
+    if u <> '' then
+      logo := '<img class="logo" src="' + u + '" alt="لوگو">';
+    contact := FStudioPhone;
+    if FStudioAddress <> '' then
+      contact := IfThen(contact <> '', contact + ' — ', '') + FStudioAddress;
+    if FStudioInstagram <> '' then
+      contact := IfThen(contact <> '', contact + ' — ', '') + FStudioInstagram;
+    if contact = '' then
+      contact := FStudioName;
+    footLine := 'با سپاس از اعتماد شما — ' + HtmlEsc(contact);
     sign1 := 'امضای مشتری';
     sign2 := 'مهر و امضای استودیو';
   end;
@@ -2756,53 +2824,93 @@ begin
     '<title>فاکتور ' + DocNo + '</title><style>' +
     '@page{size:A5 portrait;margin:8mm;}' +
     '*{box-sizing:border-box;}' +
-    'body{font-family:Tahoma,serif;font-size:11px;color:#212529;margin:0;}' +
-    '.hd{display:flex;justify-content:space-between;align-items:center;' +
-    'border-bottom:3px solid #1f8a70;padding-bottom:2mm;margin-bottom:2mm;}' +
-    '.hd h1{font-size:17px;margin:0;color:#1b2430;}' +
-    '.hd .sub{font-size:9px;color:#1f8a70;}' +
-    '.shop{margin-top:1mm;font-size:10px;color:#1b2430;background:#eef7f3;' +
-    'border:1px solid #cfe8df;border-radius:1mm;padding:1mm 2mm;' +
-    'display:inline-block;}' +
-    '.shop span{color:#1f8a70;}' +
-    '.meta{font-size:10px;color:#444;text-align:left;line-height:1.6;}' +
-    '.cust{display:flex;gap:6mm;font-size:10px;margin:1mm 0 2mm;}' +
-    '.cust span,.meta span{color:#888;}' +
-    'table{width:100%;border-collapse:collapse;}' +
-    'th,td{border:1px solid #d5d9dd;padding:3px 5px;text-align:right;}' +
-    'th{background:#1b2430;color:#fff;font-weight:bold;}' +
-    'tbody tr:nth-child(even){background:#f6f8f9;}' +
+    'body{font-family:Tahoma,serif;font-size:11px;color:#2b2f33;margin:0;' +
+    'background:#fff;}' +
+    '.top{height:3.5mm;border-radius:0 0 2mm 2mm;background:' +
+    'linear-gradient(90deg,#1f8a70,#1b2430);}' +
+    'body.shop .top{background:linear-gradient(90deg,#e9a83a,#1b2430);}' +
+    '.hd{display:flex;justify-content:space-between;align-items:flex-start;' +
+    'gap:5mm;margin:4mm 0 3mm;}' +
+    '.brand{display:flex;flex-direction:column;align-items:flex-start;' +
+    'gap:1.5mm;}' +
+    '.logo{height:17mm;width:auto;display:block;}' +
+    '.bname{font-size:19px;font-weight:bold;color:#1b2430;letter-spacing:.3px;' +
+    'line-height:1.15;}' +
+    '.btag{font-size:9px;color:#1f8a70;background:#eef7f3;' +
+    'border:1px solid #cfe8df;border-radius:6mm;padding:0.8mm 3mm;}' +
+    'body.shop .btag{color:#8a5b12;background:#fdf5e8;border-color:#f0dcb8;}' +
+    '.meta{min-width:52mm;font-size:9.5px;color:#6a737b;text-align:left;' +
+    'line-height:1.9;border-right:2.5px solid #1f8a70;padding-right:3mm;}' +
+    'body.shop .meta{border-right-color:#e9a83a;}' +
+    '.meta span{display:inline-block;min-width:11mm;color:#9aa3ab;}' +
+    '.meta b{color:#1b2430;}' +
+    '.cust{display:flex;gap:10mm;background:#f7fbf9;' +
+    'border:1px dashed #bcdcd1;border-radius:2mm;padding:1.8mm 3mm;' +
+    'font-size:10px;margin:0 0 3mm;}' +
+    '.cust span{color:#9aa3ab;margin-left:2mm;}' +
+    '.cust b{color:#1b2430;}' +
+    'table.items{width:100%;border-collapse:collapse;margin-top:1mm;}' +
+    'table.items th{background:#1b2430;color:#fff;font-weight:bold;' +
+    'font-size:10px;padding:2.2mm 2mm;text-align:right;}' +
+    'table.items th:first-child{border-radius:0 2mm 0 0;}' +
+    'table.items th:last-child{border-radius:2mm 0 0 0;}' +
+    'table.items td{border-bottom:1px solid #eceff2;padding:2.2mm 2mm;' +
+    'font-size:10.5px;}' +
+    'table.items tbody tr:nth-child(even){background:#fafcfb;}' +
     '.c{text-align:center;}' +
-    '.tot{margin-top:3mm;width:60%;margin-right:auto;}' +
-    '.tot td{border:none;padding:2px 5px;}' +
-    '.big td{font-size:14px;font-weight:bold;color:#1f8a70;' +
-    'border-top:2px solid #1f8a70;}' +
-    '.words{margin-top:2mm;padding:2mm;background:#eef7f3;border-radius:2mm;' +
-    'font-size:10px;}' +
-    '.sign{display:flex;justify-content:space-between;margin-top:10mm;' +
-    'font-size:10px;color:#666;}' +
-    '.foot{margin-top:6mm;font-size:9px;color:#777;text-align:center;}' +
-    '</style></head><body onload="window.print()">' +
-    '<div class="hd"><div><h1>' + title + '</h1>' +
-    '<div class="sub">صورت‌حساب فروش</div>' + shop + '</div>' +
-    '<div class="meta">' + meta2 + '<span>شماره:</span> ' + DocNo +
-    '<br><span>تاریخ:</span> ' + InvoiceDateText +
-    ' &nbsp; <span>ساعت:</span> ' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
+    '.num{text-align:left;direction:ltr;unicode-bidi:embed;}' +
+    '.strong{font-weight:bold;color:#1b2430;}' +
+    '.bottom{display:flex;justify-content:space-between;align-items:flex-start;' +
+    'gap:5mm;margin-top:4mm;}' +
+    '.words{flex:1;background:#eef7f3;border-right:3px solid #1f8a70;' +
+    'border-radius:2mm;padding:2mm 3mm;font-size:10px;color:#155f4c;}' +
+    'body.shop .words{background:#fdf5e8;border-right-color:#e9a83a;' +
+    'color:#8a5b12;}' +
+    '.tot{width:52%;border-collapse:collapse;}' +
+    '.tot td{border:none;padding:1.4mm 2mm;font-size:10.5px;}' +
+    '.tot td:first-child{color:#6a737b;}' +
+    '.tot td:last-child{text-align:left;direction:ltr;font-weight:bold;' +
+    'color:#1b2430;}' +
+    '.tot tr.pay td{font-size:15px;color:#155f4c;background:#eef7f3;' +
+    'border-radius:2mm;}' +
+    'body.shop .tot tr.pay td{color:#8a5b12;background:#fdf5e8;}' +
+    '.tot tr.sub td{border-top:1px solid #eceff2;}' +
+    '.sign{display:flex;justify-content:space-between;gap:8mm;margin-top:13mm;' +
+    'font-size:9.5px;color:#8a939b;}' +
+    '.sign div{flex:1;border-top:1px dashed #c3cbd2;padding-top:1.6mm;' +
+    'text-align:center;}' +
+    '.foot{margin-top:5mm;border-top:1px solid #eceff2;padding-top:2.2mm;' +
+    'font-size:8.5px;color:#98a1a9;text-align:center;line-height:1.7;}' +
+    '</style></head><body class="' + IfThen(shopMode, 'shop', 'studio') +
+    '" onload="window.print()">' +
+    '<div class="top"></div>' +
+    '<div class="hd">' +
+    '<div class="brand">' + logo +
+    '<div class="bname">' + brandName + '</div>' +
+    '<div class="btag">' + tagLine + '</div>' +
+    '</div>' +
+    '<div class="meta">' + metaLines +
+    '<div><span>شماره</span><b>' + DocNo + '</b></div>' +
+    '<div><span>تاریخ</span><b>' + InvoiceDateText + '</b></div>' +
+    '<div><span>ساعت</span><b>' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
+    '</b></div>' +
     '</div></div>' +
     IfThen(cust <> '', '<div class="cust">' + cust + '</div>', '') +
-    '<table><thead><tr><th class="c">#</th><th>شرح</th><th class="c">تعداد</th>' +
-    '<th>قیمت واحد</th><th>جمع</th></tr></thead><tbody>' + rows +
-    '</tbody></table>' +
+    '<table class="items"><thead><tr><th class="c">#</th><th>شرح</th>' +
+    '<th class="c">تعداد</th><th>قیمت واحد</th><th>جمع</th></tr></thead><tbody>' +
+    rows + '</tbody></table>' +
+    '<div class="bottom">' +
+    '<div class="words">مبلغ به حروف: <b>' + NumberToPersianWords(pay) +
+    ' تومان</b></div>' +
     '<table class="tot">' +
-    '<tr><td>جمع فروش:</td><td>' + FormatToman(rev) + '</td></tr>' +
-    IfThen(disc > 0, '<tr><td>تخفیف:</td><td>' + FormatToman(disc) +
+    '<tr><td>جمع فروش</td><td>' + FormatToman(rev) + '</td></tr>' +
+    IfThen(disc > 0, '<tr class="sub"><td>تخفیف</td><td>' + FormatToman(disc) +
     '</td></tr>', '') +
-    '<tr class="big"><td>قابل پرداخت:</td><td>' + FormatToman(pay) +
-    '</td></tr></table>' +
-    '<div class="words">مبلغ به حروف: ' + NumberToPersianWords(pay) +
-    ' تومان</div>' +
+    '<tr class="pay"><td>قابل پرداخت</td><td>' + FormatToman(pay) +
+    '</td></tr>' +
+    '</table></div>' +
     '<div class="sign"><div>' + sign1 + '</div><div>' + sign2 + '</div></div>' +
-    '<div class="foot">' + foot2 + '</div>' +
+    '<div class="foot">' + footLine + '</div>' +
     '</body></html>';
 end;
 
@@ -3026,6 +3134,13 @@ begin
   FShopName := '';
   FShopPhone := '';
   FShopAddress := '';
+  FLogoSrc := '';
+  FLogoLoaded := False;
+  FLogoUri := '';
+  FStudioName := 'استودیو عکاسی سبز';
+  FStudioPhone := '';
+  FStudioAddress := '';
+  FStudioInstagram := '';
   if not FileExists(AppDir + SettingsFile) then
     Exit;
   try
@@ -3035,6 +3150,13 @@ begin
       FShopName := Trim(ini.ReadString('PrintShop', 'Name', ''));
       FShopPhone := Trim(ini.ReadString('PrintShop', 'Phone', ''));
       FShopAddress := Trim(ini.ReadString('PrintShop', 'Address', ''));
+      FLogoSrc := Trim(ini.ReadString('Invoice', 'Logo', ''));
+      FStudioName := Trim(ini.ReadString('Studio', 'Name', ''));
+      if FStudioName = '' then
+        FStudioName := 'استودیو عکاسی سبز';
+      FStudioPhone := Trim(ini.ReadString('Studio', 'Phone', ''));
+      FStudioAddress := Trim(ini.ReadString('Studio', 'Address', ''));
+      FStudioInstagram := Trim(ini.ReadString('Studio', 'Instagram', ''));
       cs := Trim(ini.ReadString('Database', 'ConnectionString', ''));
       if cs <> '' then
         FData.ConnStr := cs;
@@ -3060,6 +3182,8 @@ begin
         ini.WriteString('PrintShop', 'Phone', FShopPhone);
       if FShopAddress <> '' then
         ini.WriteString('PrintShop', 'Address', FShopAddress);
+      if FLogoSrc <> '' then
+        ini.WriteString('Invoice', 'Logo', FLogoSrc);
       ini.UpdateFile;
     finally
       ini.Free;

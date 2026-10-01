@@ -10,8 +10,19 @@ Path=F:\Program sabz\Price.xls
 ;ConnectionString=Provider=SQLOLEDB.1;Integrated Security=SSPI;Persist Security Info=False;Initial Catalog=SABZ;Data Source=.
 
 [PrintShop]
-; نام و مشخصات چاپخانه که در هدر فاکتور A5 چاپ می‌شود.
-; اگر Name خالی باشد، هیچ خطی روی فاکتور اضافه نمی‌شود.
+; نام و مشخصات چاپخانه؛ با تیک «فاکتور با نام چاپخانه» روی فاکتور A5 می‌آید.
 Name=چاپخانه نمونه
 Phone=۰۹۱۲۳۴۵۶۷۸۹
 Address=تهران، خیابان نمونه، پلاک ۱۲
+
+[Studio]
+; مشخصات استودیو که در فاکتور عکاسی نمایش داده می‌شود (همه اختیاری).
+Name=استودیو عکاسی سبز
+Phone=۰۹۱۲۳۴۵۶۷۸۹
+Address=شیراز، ...
+Instagram=@sabz.studio
+
+[Invoice]
+; مسیر لوگوی استودیو. اگر خالی باشد، فایل logo.png کنار Project1.exe استفاده می‌شود.
+; لوگو فقط روی فاکتور عکاسی می‌آید، نه فاکتور چاپخانه.
+;Logo=C:\path\to\logo.png
