@@ -120,6 +120,8 @@ begin
   c := Trim(Code);
   if c = '' then
     Exit(pcOther);
+  if SameText(c, 'tarmim') or SameText(c, 'tarahi') then
+    Exit(pcOther);
   if StartsText('f_', c) then
     Exit(pcFile);
   if StartsText('p', c) then
@@ -150,6 +152,8 @@ begin
   c := Trim(Code);
   if StartsText('f_', c) then
     Exit('');
+  if SameText(c, 'tarmim') or SameText(c, 'tarahi') then
+    Exit('');
   if (Length(c) > 0) and (CharInSet(c[1], ['p', 'P', 's', 'S', 'l', 'L'])) and
     (Pos('*', c) > 0) then
     c := Copy(c, 2, MaxInt);
@@ -176,6 +180,10 @@ begin
     Exit('سی‌دی فقط');
   if SameText(c, 'new') then
     Exit('عکس جدید (سفارش ورودی)');
+  if SameText(c, 'tarmim') then
+    Exit('خدمات ترمیم و بازسازی عکس');
+  if SameText(c, 'tarahi') then
+    Exit('طراحی عکس');
   if SameText(c, 'nose') then
     Exit('نوز / اصلاح بینی');
   if SameText(c, 'Lottery') then

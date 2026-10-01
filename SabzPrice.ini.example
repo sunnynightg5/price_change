@@ -21,8 +21,17 @@ Name=استودیو عکاسی سبز
 Phone=۰۹۱۲۳۴۵۶۷۸۹
 Address=شیراز، ...
 Instagram=@sabz.studio
+;Email=info@example.com
+;Website=www.example.com
+;EconomicCode=411234567890
+;RegisterNo=12345
+
+[Payment]
+; فقط نام بانک روی فاکتور می‌آید (بدون شماره کارت و صاحب حساب).
+;Bank=ملت
 
 [Invoice]
 ; مسیر لوگوی استودیو. اگر خالی باشد، فایل logo.png کنار Project1.exe استفاده می‌شود.
 ; لوگو فقط روی فاکتور عکاسی می‌آید، نه فاکتور چاپخانه.
 ;Logo=C:\path\to\logo.png
+; مالیات بر ارزش افزوده با تیک «مالیات بر ارزش افزوده ۱۰٪» در صفحه محاسبه سفارش اعمال می‌شود.

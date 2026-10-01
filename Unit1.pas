@@ -58,6 +58,12 @@ type
     FStudioPhone: string;
     FStudioAddress: string;
     FStudioInstagram: string;
+    FStudioEmail: string;
+    FStudioWebsite: string;
+    FStudioEconomic: string;
+    FStudioRegister: string;
+    FPayBank: string;
+    FChkVat: TCheckBox;
     FCustomerMobile: string;
     FGridLog: TStringGrid;
     FGridPeople: TStringGrid;
@@ -179,6 +185,11 @@ type
     procedure BtnSvcBothClick(Sender: TObject);
     procedure BtnSvcFrameClick(Sender: TObject);
     procedure BtnSvcLamClick(Sender: TObject);
+    procedure BtnSvcFixClick(Sender: TObject);
+    procedure BtnSvcDesignClick(Sender: TObject);
+    procedure BtnSvcBothNewClick(Sender: TObject);
+    procedure BtnSvcBothReprintClick(Sender: TObject);
+    function VatAmount(Net: Int64): Int64;
     procedure AddService(Kind: Integer);
     function ServiceSize: string;
     function EstimatedCostOf(const Code: string): Int64;
@@ -253,6 +264,7 @@ const
 
   PriceXlsPath = 'F:\Program sabz\Price.xls'; { پیش‌فرض؛ در SabzPrice.ini قابل تغییر }
   SettingsFile = 'SabzPrice.ini';
+  VAT_PERCENT = 10;
   PriceLogFile = 'PriceLog.csv';
   CostInfoText =
     'کد p = چاپ، s = شاسی، l = لمینت. علامت «—» یعنی کدی ثبت نشده است.';
@@ -902,6 +914,10 @@ begin
     '  • کدهای دارای «a» → عکس مراسم عروس و داماد' + sLineBreak +
     '  • شروع با «s» → قیمت تمام‌شده شاسی برای ما' + sLineBreak +
     '  • شروع با «p» → قیمت تمام‌شده چاپ برای ما' + sLineBreak +
+    '  • کد «tarmim» → خدمات ترمیم و بازسازی عکس' + sLineBreak +
+    '  • کد «tarahi» → طراحی عکس' + sLineBreak +
+    '  • دکمه‌های «شاسی و لمینت + عکس جدید/چاپ مجدد» → یک ردیف با قیمت مشتری' +
+    sLineBreak +
     '  • شروع با «f_» → فقط فایل' + sLineBreak +
     '  • بقیه کدها پرسنلی یا طبق نام مشخص هستند', C_TEXT, 10);
   guide.Align := alClient;
@@ -1202,7 +1218,7 @@ begin
 
   cartTool := MakePanel(cartCard, C_CARD);
   cartTool.Align := alTop;
-  cartTool.Height := 126;
+  cartTool.Height := 166;
 
   with MakeButton(cartTool, 'حذف انتخاب', C_DANGER, clWhite,
     BtnRemoveClick) do
@@ -1299,6 +1315,36 @@ begin
     Width := 74;
     Height := 30;
   end;
+  with MakeButton(cartTool, 'ترمیم عکس', C_ACCENT_L, C_NAVY, BtnSvcFixClick) do
+  begin
+    Left := 304;
+    Top := 88;
+    Width := 104;
+    Height := 30;
+  end;
+  with MakeButton(cartTool, 'طراحی عکس', C_ACCENT_L, C_NAVY, BtnSvcDesignClick) do
+  begin
+    Left := 414;
+    Top := 88;
+    Width := 100;
+    Height := 30;
+  end;
+  with MakeButton(cartTool, 'شاسی و لمینت + عکس جدید', C_GOLD, C_TEXT,
+    BtnSvcBothNewClick) do
+  begin
+    Left := 8;
+    Top := 128;
+    Width := 240;
+    Height := 30;
+  end;
+  with MakeButton(cartTool, 'شاسی و لمینت + چاپ مجدد', C_GOLD, C_TEXT,
+    BtnSvcBothReprintClick) do
+  begin
+    Left := 254;
+    Top := 128;
+    Width := 240;
+    Height := 30;
+  end;
 
   totals := MakePanel(cartCard, C_ALT);
   totals.Align := alBottom;
@@ -1354,6 +1400,19 @@ begin
   FChkShop.BiDiMode := bdRightToLeft;
   FChkShop.Hint := 'اگر تیک بخورد، فاکتور به نام چاپخانه (از SabzPrice.ini) صادر می‌شود';
   FChkShop.ShowHint := True;
+
+  FChkVat := TCheckBox.Create(totals);
+  FChkVat.Parent := totals;
+  FChkVat.Left := 366;
+  FChkVat.Top := 40;
+  FChkVat.Width := 160;
+  FChkVat.Height := 22;
+  FChkVat.Caption := 'مالیات بر ارزش افزوده ۱۰٪';
+  FChkVat.Font.Name := 'Tahoma';
+  FChkVat.Font.Size := 9;
+  FChkVat.BiDiMode := bdRightToLeft;
+  FChkVat.Hint := 'اگر تیک بخورد، ۱۰٪ مالیات به مبلغ فاکتور اضافه می‌شود';
+  FChkVat.ShowHint := True;
 
   with MakeLabel(totals, 'سود خالص:', C_SUCCESS, 11, True) do
   begin
@@ -2632,6 +2691,14 @@ begin
     FEdInvDate.SelectAll;
 end;
 
+function TForm1.VatAmount(Net: Int64): Int64;
+begin
+  if (FChkVat <> nil) and FChkVat.Checked and (Net > 0) then
+    Result := Round(Net * VAT_PERCENT / 100.0)
+  else
+    Result := 0;
+end;
+
 function TForm1.LogoDataUri: string;
 var
   path, ext, mime: string;
@@ -2703,6 +2770,7 @@ var
   line: TCartLine;
   txt: string;
   shopMode: Boolean;
+  net, vat: Int64;
 begin
   DocNo := 'SABZ-' + FormatDateTime('yymmdd-hhnnss', Now);
   Revenue := 0;
@@ -2713,8 +2781,10 @@ begin
     Cost := Cost + Int64(line.Qty) * line.Cost;
   end;
   Discount := DiscountValue(Revenue);
-  Payable := Revenue - Discount;
-  Profit := Payable - Cost;
+  net := Revenue - Discount;
+  vat := VatAmount(net);
+  Payable := net + vat;
+  Profit := net - Cost;
   shopMode := (FChkShop <> nil) and FChkShop.Checked and (FShopName <> '');
   if shopMode then
     txt := 'صورت‌حساب ' + FShopName
@@ -2744,6 +2814,9 @@ begin
   txt := txt + 'جمع فروش: ' + FormatToman(Revenue) + sLineBreak;
   if Discount > 0 then
     txt := txt + 'تخفیف: ' + FormatToman(Discount) + sLineBreak;
+  if vat > 0 then
+    txt := txt + 'مالیات بر ارزش افزوده (' + ToPersianDigits(IntToStr(VAT_PERCENT)) +
+      '٪): ' + FormatToman(vat) + sLineBreak;
   txt := txt + 'قابل پرداخت: ' + FormatToman(Payable) + sLineBreak;
   txt := txt + '(' + NumberToPersianWords(Payable) + ' تومان)' + sLineBreak;
   Result := txt;
@@ -2759,13 +2832,15 @@ end;
 function TForm1.InvoiceHTML(const DocNo: string): string;
 var
   line: TCartLine;
-  rows, dummy, cust, logo, u: string;
-  rev, cost, prof, disc, pay: Int64;
+  rows, dummy, cust, logo, u, brandBlock, metaRows, contactLine: string;
+  payInfo, vatPct, camSvg, flowerSvg: string;
+  rev, cost, prof, disc, pay, net, vat: Int64;
   n: Integer;
   shopMode: Boolean;
-  brandName, tagLine, metaLines, footLine, sign1, sign2, contact: string;
 begin
   InvoiceText(dummy, rev, cost, prof, disc, pay);
+  net := rev - disc;
+  vat := VatAmount(net);
   rows := '';
   n := 0;
   for line in FCart do
@@ -2780,138 +2855,153 @@ begin
   end;
   cust := '';
   if Trim(FEdCustomer.Text) <> '' then
-    cust := '<div><span>مشتری</span><b>' + HtmlEsc(Trim(FEdCustomer.Text)) +
-      '</b></div>';
+    cust := cust + '<div><span class="k">مشتری:</span> ' +
+      HtmlEsc(Trim(FEdCustomer.Text)) + '</div>';
   if FCustomerMobile <> '' then
-    cust := cust + '<div><span>موبایل</span><b>' + HtmlEsc(FCustomerMobile) +
-      '</b></div>';
+    cust := cust + '<div><span class="k">تلفن:</span> ' +
+      HtmlEsc(FCustomerMobile) + '</div>';
   shopMode := (FChkShop <> nil) and FChkShop.Checked and (FShopName <> '');
   logo := '';
+  camSvg := '<svg class="cam" width="20" height="17" viewBox="0 0 24 20" ' +
+    'fill="none" stroke="#444" stroke-width="1.6"><rect x="1" y="4" width="22" ' +
+    'height="15" rx="2.5"/><path d="M8 4l1.6-2.6h4.8L16 4"/>' +
+    '<circle cx="12" cy="11.5" r="4"/></svg>';
+  flowerSvg := '<svg class="flower" width="24" height="18" viewBox="0 0 26 20" ' +
+    'fill="none" stroke="#1f8a70" stroke-width="1.4"><path d="M13 19V8"/>' +
+    '<path d="M13 13c-3.2 0-5.4-2.2-5.4-5.4 3.2 0 5.4 2.2 5.4 5.4z"/>' +
+    '<path d="M13 13c3.2 0 5.4-2.2 5.4-5.4-3.2 0-5.4 2.2-5.4 5.4z"/>' +
+    '<circle cx="13" cy="4.5" r="1.7"/></svg>';
   if shopMode then
   begin
-    brandName := HtmlEsc(FShopName);
-    tagLine := 'صورت‌حساب فروش';
-    metaLines :=
-      IfThen(FShopPhone <> '', '<div><span>تلفن</span><b>' +
-      HtmlEsc(FShopPhone) + '</b></div>', '') +
-      IfThen(FShopAddress <> '', '<div><span>نشانی</span><b>' +
-      HtmlEsc(FShopAddress) + '</b></div>', '');
-    footLine := 'این فاکتور به نمایندگی از ' + HtmlEsc(FStudioName) +
+    brandBlock := '<div class="bname">' + HtmlEsc(FShopName) + '</div>';
+    metaRows :=
+      IfThen(FShopPhone <> '', '<div><span class="k">تلفن:</span> ' +
+      HtmlEsc(FShopPhone) + '</div>', '') +
+      IfThen(FShopAddress <> '', '<div><span class="k">نشانی:</span> ' +
+      HtmlEsc(FShopAddress) + '</div>', '');
+    contactLine := 'این فاکتور به نمایندگی از ' + HtmlEsc(FStudioName) +
       ' صادر شده است.';
-    sign1 := 'مهر و امضای چاپخانه';
-    sign2 := 'تأیید استودیو';
   end
   else
   begin
-    brandName := HtmlEsc(FStudioName);
-    tagLine := 'صورت‌حساب فروش';
     u := LogoDataUri;
     if u <> '' then
-      logo := '<img class="logo" src="' + u + '" alt="لوگو">';
-    contact := FStudioPhone;
-    if FStudioAddress <> '' then
-      contact := IfThen(contact <> '', contact + ' — ', '') + FStudioAddress;
-    if FStudioInstagram <> '' then
-      contact := IfThen(contact <> '', contact + ' — ', '') + FStudioInstagram;
-    if contact = '' then
-      contact := FStudioName;
-    footLine := 'با سپاس از اعتماد شما — ' + HtmlEsc(contact);
-    sign1 := 'امضای مشتری';
-    sign2 := 'مهر و امضای استودیو';
+      logo := '<img class="logo" src="' + u + '" alt="لوگو">'
+    else
+      logo := '<div class="bname">' + HtmlEsc(FStudioName) + '</div>';
+    brandBlock := logo;
+    metaRows := '';
+    contactLine := FStudioPhone;
+    if FStudioEmail <> '' then
+      contactLine := contactLine + ' | ' + FStudioEmail;
+    if FStudioWebsite <> '' then
+      contactLine := contactLine + ' | ' + FStudioWebsite;
+    contactLine := HtmlEsc(Trim(contactLine));
+    if contactLine = '' then
+      contactLine := HtmlEsc(FStudioName);
   end;
+  metaRows := metaRows +
+    '<div><span class="k">شماره فاکتور:</span> ' + DocNo + '</div>' +
+    '<div><span class="k">تاریخ:</span> ' + InvoiceDateText +
+    ' &nbsp; <span class="k">ساعت:</span> ' +
+    ToPersianDigits(FormatDateTime('hh:nn', Now)) + '</div>';
+  if FStudioEconomic <> '' then
+    metaRows := metaRows + '<div><span class="k">شماره اقتصادی:</span> ' +
+      HtmlEsc(FStudioEconomic) + '</div>';
+  if FStudioRegister <> '' then
+    metaRows := metaRows + '<div><span class="k">شماره ثبت:</span> ' +
+      HtmlEsc(FStudioRegister) + '</div>';
+  vatPct := ToPersianDigits(IntToStr(VAT_PERCENT));
+  payInfo := '';
+  if FPayBank <> '' then
+    payInfo := '<div class="sec">اطلاعات پرداخت</div>' +
+      '<div class="payinfo"><span class="k">نام بانک:</span> ' +
+      HtmlEsc(FPayBank) + '</div>';
   Result :=
     '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">' +
     '<title>فاکتور ' + DocNo + '</title><style>' +
-    '@page{size:A5 portrait;margin:8mm;}' +
+    '@page{size:A5 portrait;margin:7mm;}' +
     '*{box-sizing:border-box;}' +
-    'body{font-family:Tahoma,serif;font-size:11px;color:#2b2f33;margin:0;' +
-    'background:#fff;}' +
-    '.top{height:3.5mm;border-radius:0 0 2mm 2mm;background:' +
-    'linear-gradient(90deg,#1f8a70,#1b2430);}' +
-    'body.shop .top{background:linear-gradient(90deg,#e9a83a,#1b2430);}' +
+    'body{font-family:Vazirmatn,IRANSans,Sahel,Tahoma,"Segoe UI",sans-serif;' +
+    'font-size:11px;color:#333;margin:0;background:#fbf8f1;}' +
+    'body.shop{color:#333;}' +
+    '.page{border:1px solid #ded6c4;border-radius:2mm;padding:4mm 5mm 3mm;' +
+    'background:#fbf8f1;}' +
+    '.top{height:2.6mm;border-radius:2mm 2mm 0 0;background:#1f8a70;' +
+    'margin-bottom:3mm;}' +
+    'body.shop .top{background:#e9a83a;}' +
     '.hd{display:flex;justify-content:space-between;align-items:flex-start;' +
-    'gap:5mm;margin:4mm 0 3mm;}' +
-    '.brand{display:flex;flex-direction:column;align-items:flex-start;' +
-    'gap:1.5mm;}' +
-    '.logo{height:17mm;width:auto;display:block;}' +
-    '.bname{font-size:19px;font-weight:bold;color:#1b2430;letter-spacing:.3px;' +
-    'line-height:1.15;}' +
-    '.btag{font-size:9px;color:#1f8a70;background:#eef7f3;' +
-    'border:1px solid #cfe8df;border-radius:6mm;padding:0.8mm 3mm;}' +
-    'body.shop .btag{color:#8a5b12;background:#fdf5e8;border-color:#f0dcb8;}' +
-    '.meta{min-width:52mm;font-size:9.5px;color:#6a737b;text-align:left;' +
-    'line-height:1.9;border-right:2.5px solid #1f8a70;padding-right:3mm;}' +
-    'body.shop .meta{border-right-color:#e9a83a;}' +
-    '.meta span{display:inline-block;min-width:11mm;color:#9aa3ab;}' +
-    '.meta b{color:#1b2430;}' +
-    '.cust{display:flex;gap:10mm;background:#f7fbf9;' +
-    'border:1px dashed #bcdcd1;border-radius:2mm;padding:1.8mm 3mm;' +
-    'font-size:10px;margin:0 0 3mm;}' +
-    '.cust span{color:#9aa3ab;margin-left:2mm;}' +
-    '.cust b{color:#1b2430;}' +
-    'table.items{width:100%;border-collapse:collapse;margin-top:1mm;}' +
-    'table.items th{background:#1b2430;color:#fff;font-weight:bold;' +
-    'font-size:10px;padding:2.2mm 2mm;text-align:right;}' +
-    'table.items th:first-child{border-radius:0 2mm 0 0;}' +
-    'table.items th:last-child{border-radius:2mm 0 0 0;}' +
-    'table.items td{border-bottom:1px solid #eceff2;padding:2.2mm 2mm;' +
-    'font-size:10.5px;}' +
-    'table.items tbody tr:nth-child(even){background:#fafcfb;}' +
+    'gap:5mm;}' +
+    '.brand{display:flex;flex-direction:column;align-items:flex-start;}' +
+    '.logo{height:23mm;width:auto;display:block;}' +
+    '.bname{font-size:19px;font-weight:bold;color:#333;}' +
+    '.doc{text-align:left;min-width:60mm;}' +
+    '.ttl{font-size:17px;font-weight:bold;color:#333;margin-bottom:1.5mm;' +
+    'white-space:nowrap;}' +
+    '.ttl .cam{vertical-align:-1.5mm;margin-left:2mm;}' +
+    '.meta{font-size:9.5px;color:#555;text-align:left;line-height:1.85;' +
+    'direction:rtl;}' +
+    '.meta .k{color:#8a8a8a;}' +
+    '.contact{margin-top:2.5mm;background:#efe9dc;border-radius:1.5mm;' +
+    'padding:1.5mm 3mm;font-size:9.5px;color:#555;text-align:center;}' +
+    '.sec{background:#efe9dc;border-right:3px solid #1f8a70;padding:1.4mm 3mm;' +
+    'font-weight:bold;font-size:10.5px;color:#444;margin:3.5mm 0 1.5mm;' +
+    'border-radius:1.5mm 0 0 1.5mm;}' +
+    'body.shop .sec{border-right-color:#e9a83a;}' +
+    '.cust{display:flex;flex-wrap:wrap;gap:3mm 10mm;font-size:10.5px;' +
+    'color:#333;padding:0 2mm;line-height:1.9;}' +
+    '.cust .k,.payinfo .k{color:#8a8a8a;}' +
+    'table.items{width:100%;border-collapse:collapse;margin-top:1.5mm;' +
+    'border:1px solid #cfc7b6;}' +
+    'table.items th{background:#3b3b3b;color:#fff;font-weight:bold;' +
+    'font-size:10px;padding:2mm;border:1px solid #cfc7b6;text-align:right;}' +
+    'table.items td{border:1px solid #ded7c7;padding:2mm;font-size:10.5px;' +
+    'vertical-align:middle;}' +
+    'table.items tbody tr:nth-child(even){background:#f5f1e7;}' +
     '.c{text-align:center;}' +
     '.num{text-align:left;direction:ltr;unicode-bidi:embed;}' +
-    '.strong{font-weight:bold;color:#1b2430;}' +
-    '.bottom{display:flex;justify-content:space-between;align-items:flex-start;' +
-    'gap:5mm;margin-top:4mm;}' +
-    '.words{flex:1;background:#eef7f3;border-right:3px solid #1f8a70;' +
-    'border-radius:2mm;padding:2mm 3mm;font-size:10px;color:#155f4c;}' +
-    'body.shop .words{background:#fdf5e8;border-right-color:#e9a83a;' +
-    'color:#8a5b12;}' +
-    '.tot{width:52%;border-collapse:collapse;}' +
-    '.tot td{border:none;padding:1.4mm 2mm;font-size:10.5px;}' +
-    '.tot td:first-child{color:#6a737b;}' +
-    '.tot td:last-child{text-align:left;direction:ltr;font-weight:bold;' +
-    'color:#1b2430;}' +
-    '.tot tr.pay td{font-size:15px;color:#155f4c;background:#eef7f3;' +
-    'border-radius:2mm;}' +
-    'body.shop .tot tr.pay td{color:#8a5b12;background:#fdf5e8;}' +
-    '.tot tr.sub td{border-top:1px solid #eceff2;}' +
-    '.sign{display:flex;justify-content:space-between;gap:8mm;margin-top:13mm;' +
-    'font-size:9.5px;color:#8a939b;}' +
-    '.sign div{flex:1;border-top:1px dashed #c3cbd2;padding-top:1.6mm;' +
-    'text-align:center;}' +
-    '.foot{margin-top:5mm;border-top:1px solid #eceff2;padding-top:2.2mm;' +
-    'font-size:8.5px;color:#98a1a9;text-align:center;line-height:1.7;}' +
+    '.strong{font-weight:bold;}' +
+    '.tot{width:100%;border-collapse:collapse;margin-top:2.5mm;}' +
+    '.tot td{padding:1.6mm 3mm;font-size:10.5px;' +
+    'border-bottom:1px solid #e2dbcb;}' +
+    '.tot td:first-child{color:#555;}' +
+    '.tot td:last-child{text-align:left;direction:ltr;font-weight:bold;}' +
+    '.tot tr.pay td{background:#efe9dc;font-size:14px;color:#1b2430;' +
+    'font-weight:bold;border-bottom:none;}' +
+    '.tot tr.words td{background:transparent;font-size:10.5px;color:#333;' +
+    'font-weight:bold;border-bottom:none;}' +
+    '.payinfo{font-size:10.5px;color:#333;padding:0 2mm;line-height:1.9;}' +
+    '.foot{margin-top:4mm;text-align:center;font-size:10px;color:#666;' +
+    'border-top:1px solid #e2dbcb;padding-top:2mm;}' +
+    '.flower{vertical-align:-2mm;margin-left:2mm;}' +
     '</style></head><body class="' + IfThen(shopMode, 'shop', 'studio') +
-    '" onload="window.print()">' +
+    '" onload="window.print()"><div class="page">' +
     '<div class="top"></div>' +
     '<div class="hd">' +
-    '<div class="brand">' + logo +
-    '<div class="bname">' + brandName + '</div>' +
-    '<div class="btag">' + tagLine + '</div>' +
+    '<div class="doc"><div class="ttl">' + camSvg + 'فاکتور فروش</div>' +
+    '<div class="meta">' + metaRows + '</div></div>' +
+    '<div class="brand">' + brandBlock + '</div>' +
     '</div>' +
-    '<div class="meta">' + metaLines +
-    '<div><span>شماره</span><b>' + DocNo + '</b></div>' +
-    '<div><span>تاریخ</span><b>' + InvoiceDateText + '</b></div>' +
-    '<div><span>ساعت</span><b>' + ToPersianDigits(FormatDateTime('hh:nn', Now)) +
-    '</b></div>' +
-    '</div></div>' +
-    IfThen(cust <> '', '<div class="cust">' + cust + '</div>', '') +
-    '<table class="items"><thead><tr><th class="c">#</th><th>شرح</th>' +
-    '<th class="c">تعداد</th><th>قیمت واحد</th><th>جمع</th></tr></thead><tbody>' +
-    rows + '</tbody></table>' +
-    '<div class="bottom">' +
-    '<div class="words">مبلغ به حروف: <b>' + NumberToPersianWords(pay) +
-    ' تومان</b></div>' +
+    '<div class="contact">' + contactLine + '</div>' +
+    '<div class="sec">اطلاعات مشتری</div>' +
+    '<div class="cust">' + IfThen(cust = '', '&nbsp;', cust) + '</div>' +
+    '<table class="items"><thead><tr><th class="c">ردیف</th>' +
+    '<th>شرح خدمات</th><th class="c">تعداد/مدت</th><th>قیمت واحد (تومان)</th>' +
+    '<th>مبلغ کل (تومان)</th></tr></thead><tbody>' + rows +
+    '</tbody></table>' +
     '<table class="tot">' +
-    '<tr><td>جمع فروش</td><td>' + FormatToman(rev) + '</td></tr>' +
-    IfThen(disc > 0, '<tr class="sub"><td>تخفیف</td><td>' + FormatToman(disc) +
-    '</td></tr>', '') +
-    '<tr class="pay"><td>قابل پرداخت</td><td>' + FormatToman(pay) +
+    '<tr><td>جمع کل</td><td>' + FormatToman(rev) + '</td></tr>' +
+    '<tr><td>تخفیف</td><td>' + FormatToman(disc) + '</td></tr>' +
+    '<tr><td>مالیات بر ارزش افزوده (' + vatPct + '٪)</td><td>' +
+    FormatToman(vat) + '</td></tr>' +
+    '<tr class="pay"><td>مبلغ قابل پرداخت</td><td>' + FormatToman(pay) +
     '</td></tr>' +
-    '</table></div>' +
-    '<div class="sign"><div>' + sign1 + '</div><div>' + sign2 + '</div></div>' +
-    '<div class="foot">' + footLine + '</div>' +
-    '</body></html>';
+    '<tr class="words"><td colspan="2">مبلغ قابل پرداخت (به حروف): ' +
+    NumberToPersianWords(pay) + ' تومان</td></tr>' +
+    '</table>' +
+    payInfo +
+    '<div class="foot">' + flowerSvg + 'با تشکر از اعتماد شما!</div>' +
+    '</div></body></html>';
 end;
 
 procedure TForm1.BtnCopyInvoiceClick(Sender: TObject);
@@ -3009,6 +3099,26 @@ begin
   AddService(3);
 end;
 
+procedure TForm1.BtnSvcFixClick(Sender: TObject);
+begin
+  AddService(4);
+end;
+
+procedure TForm1.BtnSvcDesignClick(Sender: TObject);
+begin
+  AddService(5);
+end;
+
+procedure TForm1.BtnSvcBothNewClick(Sender: TObject);
+begin
+  AddService(6);
+end;
+
+procedure TForm1.BtnSvcBothReprintClick(Sender: TObject);
+begin
+  AddService(7);
+end;
+
 function TForm1.ServiceSize: string;
 var
   it: TPriceItem;
@@ -3041,17 +3151,28 @@ end;
 
 procedure TForm1.AddService(Kind: Integer);
 var
-  sz, code, title, disp: string;
-  price, cost, pf, pl: Int64;
+  sz, code, title, disp, c1, c2, miss: string;
+  price, cost, pf, pl, p1, p2: Int64;
   line: TCartLine;
   found: Boolean;
 begin
-  sz := ServiceSize;
-  if sz = '' then
-    Exit;
-  disp := #$202A + StringReplace(sz, '*', ' × ', [rfReplaceAll]) + #$202C;
-  pf := PriceOf('s' + sz);
-  pl := PriceOf('l' + sz);
+  sz := '';
+  disp := '';
+  code := '';
+  miss := '';
+  price := 0;
+  cost := 0;
+  pf := -1;
+  pl := -1;
+  if Kind in [1, 2, 3, 6, 7] then
+  begin
+    sz := ServiceSize;
+    if sz = '' then
+      Exit;
+    disp := #$202A + StringReplace(sz, '*', ' × ', [rfReplaceAll]) + #$202C;
+    pf := PriceOf('s' + sz);
+    pl := PriceOf('l' + sz);
+  end;
   case Kind of
     1:
       begin
@@ -3070,18 +3191,71 @@ begin
         cost := 0;
         title := 'شاسی ' + disp;
       end;
+    3:
+      begin
+        code := 'l' + sz;
+        price := pl;
+        cost := 0;
+        title := 'لمینت ' + disp;
+      end;
+    4:
+      begin
+        code := 'tarmim';
+        price := PriceOf(code);
+        cost := 0;
+        title := 'خدمات ترمیم و بازسازی عکس';
+      end;
+    5:
+      begin
+        code := 'tarahi';
+        price := PriceOf(code);
+        cost := 0;
+        title := 'طراحی عکس';
+      end;
+    6:
+      begin
+        { شاسی و لمینت + عکس جدید (فقط چاپ) }
+        c1 := sz + 'n';
+        c2 := sz + '_';
+        p1 := PriceOf(c1);
+        p2 := PriceOf(c2);
+        if (p1 >= 0) and (p2 >= 0) then
+          price := p1 + p2
+        else
+          price := -1;
+        if p1 < 0 then
+          miss := c1;
+        if p2 < 0 then
+          miss := IfThen(miss = '', c2, miss + ' ، ' + c2);
+        cost := EstimatedCostOf(c1) + EstimatedCostOf(c2);
+        code := c1 + '+' + c2;
+        title := 'شاسی و لمینت + عکس جدید ' + disp;
+      end;
   else
     begin
-      code := 'l' + sz;
-      price := pl;
-      cost := 0;
-      title := 'لمینت ' + disp;
+      { شاسی و لمینت + چاپ مجدد }
+      c1 := sz;
+      c2 := sz + '_';
+      p1 := PriceOf(c1);
+      p2 := PriceOf(c2);
+      if (p1 >= 0) and (p2 >= 0) then
+        price := p1 + p2
+      else
+        price := -1;
+      if p1 < 0 then
+        miss := c1;
+      if p2 < 0 then
+        miss := IfThen(miss = '', c2, miss + ' ، ' + c2);
+      cost := EstimatedCostOf(c1) + EstimatedCostOf(c2);
+      code := c1 + '+' + c2;
+      title := 'شاسی و لمینت + چاپ مجدد ' + disp;
     end;
   end;
   if price < 0 then
   begin
     Application.MessageBox(PChar('قیمت «' + title +
       '» در جدول قیمت‌ها پیدا نشد.' + sLineBreak +
+      IfThen(miss <> '', 'کد(های) ناموجود: ' + miss + sLineBreak, '') +
       'ابتدا کد مربوطه را در صفحه «ویرایش قیمت» ثبت کنید.'),
       'سرویس', MB_OK or MB_ICONWARNING);
     Exit;
@@ -3141,6 +3315,11 @@ begin
   FStudioPhone := '';
   FStudioAddress := '';
   FStudioInstagram := '';
+  FStudioEmail := '';
+  FStudioWebsite := '';
+  FStudioEconomic := '';
+  FStudioRegister := '';
+  FPayBank := '';
   if not FileExists(AppDir + SettingsFile) then
     Exit;
   try
@@ -3157,6 +3336,11 @@ begin
       FStudioPhone := Trim(ini.ReadString('Studio', 'Phone', ''));
       FStudioAddress := Trim(ini.ReadString('Studio', 'Address', ''));
       FStudioInstagram := Trim(ini.ReadString('Studio', 'Instagram', ''));
+      FStudioEmail := Trim(ini.ReadString('Studio', 'Email', ''));
+      FStudioWebsite := Trim(ini.ReadString('Studio', 'Website', ''));
+      FStudioEconomic := Trim(ini.ReadString('Studio', 'EconomicCode', ''));
+      FStudioRegister := Trim(ini.ReadString('Studio', 'RegisterNo', ''));
+      FPayBank := Trim(ini.ReadString('Payment', 'Bank', ''));
       cs := Trim(ini.ReadString('Database', 'ConnectionString', ''));
       if cs <> '' then
         FData.ConnStr := cs;
